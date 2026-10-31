@@ -397,14 +397,16 @@ static void raiseCpuFrequency (void)
       if (row == before) { current = hz; }
       previous = hz; top = hz; rows = row + 1;
     }
-    if ((enabled & 1) == 0 || rows == 0) {
-      IOLog ("ArmCpu: cpufreq domain %u not enabled (0x%x) rows=%u, left alone\n", domain, enabled, rows);
+    if (rows == 0) {
+      IOLog ("ArmCpu: cpufreq domain %u has no lookup table (enable 0x%x), left alone\n", domain, enabled);
       continue;
     }
+    // The two A76 domains read enable 0x2, not bit 0, yet carry a valid table; request their top row as well and let the
+    // readback (and the next boot's "row" before) show whether the hardware takes it.
     write32 (base, 0x920, rows - 1);
     __asm__ volatile ("dsb sy" ::: "memory");
-    IOLog ("ArmCpu: cpufreq domain %u row %u (%llu MHz) -> row %u (%llu MHz) of %u, readback %u\n", domain, before,
-        current / 1000000, rows - 1, top / 1000000, rows, read32 (base, 0x920));
+    IOLog ("ArmCpu: cpufreq domain %u enable 0x%x row %u (%llu MHz) -> row %u (%llu MHz) of %u, readback %u\n", domain,
+        enabled, before, current / 1000000, rows - 1, top / 1000000, rows, read32 (base, 0x920));
   }
 }
 
