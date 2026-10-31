@@ -1913,7 +1913,7 @@ diff --git a/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch
-@@ -0,0 +1,1955 @@
+@@ -0,0 +1,1957 @@
 +diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 +--- a/bsd/vfs/vfs_syscalls.c
 ++++ b/bsd/vfs/vfs_syscalls.c
@@ -2360,7 +2360,7 @@ new file mode 100644
 + 
 + #if SYSV_SHM
 + #include <sys/shm_internal.h>   /* shmexit */
-+@@ -1359,6 +1364,325 @@
++@@ -1359,6 +1364,327 @@
 + 
 + #define OS_REASON_TOTAL_USER_FAULTS_PER_PROC  5
 + 
@@ -2617,10 +2617,10 @@ new file mode 100644
 ++}
 ++
 ++/* Diagnostic: SpringBoard waits in notify_register_check for notifyd. Every two
-++ * minutes after the framebuffer client opens, four times, print the receive queues,
+++ * minutes after the framebuffer client opens, fifteen times, print the receive queues,
 ++ * workqueue and threads of both, and the runnable threads, without ending anyone. */
 ++#include <kern/clock.h>
-++#define PICASSO_SNAPSHOT_COUNT 4
+++#define PICASSO_SNAPSHOT_COUNT 15
 ++#define PICASSO_SNAPSHOT_PERIOD_S 120ull
 ++extern void picasso_dump_receive_rights(task_t task, const char *who);
 ++extern void picasso_workq_report(proc_t p, const char *who);
@@ -2661,6 +2661,8 @@ new file mode 100644
 ++	if (client != PROC_NULL) proc_rele(client);
 ++	proc_t p = picasso_dump_named_proc("notifyd");
 ++	if (p != PROC_NULL) proc_rele(p);
+++	proc_t seeder = picasso_dump_named_proc("lsd");
+++	if (seeder != PROC_NULL) proc_rele(seeder);
 ++	picasso_dump_runnable();
 ++	if (++taken < PICASSO_SNAPSHOT_COUNT) {
 ++		uint64_t interval = 0;

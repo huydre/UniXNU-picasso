@@ -237,9 +237,9 @@ kernel_args = [
   "-v",
   "debug=0x14e",
   "cpus=1",
-  # A test session returns to Fastboot by itself after ten minutes (USB console
-  # reboot-fastboot path), so the next image needs no button press.
-  "picasso_session_s=600",
+  # No picasso_session_s timer: after a long run the bootloader ignores the armed
+  # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
+  # rebuilds the LaunchServices database for longer than a short session lasts.
   # Production root path. native-ufs-root=1 starts the root from the
   # root-device personality without the diagnostic media-report panic that
   # native-ufs-probe=12 ends with. Upstream's payload guard (check_native_root)
