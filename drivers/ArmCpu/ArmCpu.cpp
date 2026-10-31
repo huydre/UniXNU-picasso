@@ -373,6 +373,41 @@ void ArmCpu::enableGic (void)
 }
 
 
+// armcpu-cpufreq=1: run every SM7250 frequency domain at the top row of its lookup table. Firmware leaves the cores at a
+// modest speed and expects the OS to ask for more; the OSM block switches clock source and voltage by itself once a row
+// is requested. Bases are the board DT's qcom,cpufreq-hw domains (A55 x6, A76 core 6, A76 core 7); the layout is the
+// non-EPSS one of Linux drivers/cpufreq/qcom-cpufreq-hw.c: LUT rows of 32 bytes from 0x110, perf state at 0x920.
+static void raiseCpuFrequency (void)
+{
+  static const uint64_t kDomains[] = { 0x18323000, 0x18325800, 0x18327800 };
+  const uint64_t kXoHz = 19200000, kCpuHwHz = 300000000;
+  for (unsigned domain = 0; domain < 3; domain++) {
+    OSSharedPtr<IOMemoryDescriptor> memory (IOMemoryDescriptor::withPhysicalAddress (kDomains[domain], 0x1000,
+        kIODirectionInOut), OSNoRetain);
+    OSSharedPtr<IOMemoryMap> map (memory ? memory->map (kIOMapAnywhere | kIOMapInhibitCache) : nullptr, OSNoRetain);
+    if (!map) { IOLog ("ArmCpu: cpufreq domain %u map failed\n", domain); continue; }
+    const uintptr_t base = static_cast<uintptr_t> (map->getVirtualAddress ());
+    const uint32_t enabled = read32 (base, 0x0), before = read32 (base, 0x920);
+    uint64_t previous = 0, top = 0, current = 0;
+    unsigned rows = 0;
+    for (unsigned row = 0; row < 40; row++) {
+      const uint32_t data = read32 (base, 0x110 + row * 32);
+      const uint64_t hz = ((data >> 30) & 3) ? kXoHz * (data & 0xff) : kCpuHwHz;
+      if (row > 0 && hz == previous) { break; }   // the table repeats its last row to the end
+      if (row == before) { current = hz; }
+      previous = hz; top = hz; rows = row + 1;
+    }
+    if ((enabled & 1) == 0 || rows == 0) {
+      IOLog ("ArmCpu: cpufreq domain %u not enabled (0x%x) rows=%u, left alone\n", domain, enabled, rows);
+      continue;
+    }
+    write32 (base, 0x920, rows - 1);
+    __asm__ volatile ("dsb sy" ::: "memory");
+    IOLog ("ArmCpu: cpufreq domain %u row %u (%llu MHz) -> row %u (%llu MHz) of %u, readback %u\n", domain, before,
+        current / 1000000, rows - 1, top / 1000000, rows, read32 (base, 0x920));
+  }
+}
+
 bool ArmCpu::start (IOService *provider)
 {
   unsigned skip = 0;
@@ -408,6 +443,9 @@ bool ArmCpu::start (IOService *provider)
     __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (bootMpidr));
     armcpu_boot_mpidr = static_cast<uint32_t> (bootMpidr);
     if ((!skipGic && !prepareGic ()) || !IOCPU::start (provider)) { return false; }
+    unsigned cpufreq = 0;
+    PE_parse_boot_argn ("armcpu-cpufreq", &cpufreq, sizeof (cpufreq));
+    if (cpufreq == 1) { raiseCpuFrequency (); }
   }
   cpuName = OSSymbol::withCStringNoCopy ("ARM architectural boot CPU");
   if (cpuName == nullptr) { return false; }

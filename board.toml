@@ -245,6 +245,10 @@ kernel_args = [
   "sheng-smp=1",
   "armcpu-self-ipi=1",
   "armcpu-spi-ipi=1",
+  # Every frequency domain at the top of its lookup table (ArmCpu raiseCpuFrequency):
+  # firmware leaves the cores slow. No thermal governor runs yet; the SoC's own limits
+  # management hardware still applies.
+  "armcpu-cpufreq=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.
