@@ -1913,7 +1913,7 @@ diff --git a/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch
-@@ -0,0 +1,1943 @@
+@@ -0,0 +1,1947 @@
 +diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 +--- a/bsd/vfs/vfs_syscalls.c
 ++++ b/bsd/vfs/vfs_syscalls.c
@@ -2360,7 +2360,7 @@ new file mode 100644
 + 
 + #if SYSV_SHM
 + #include <sys/shm_internal.h>   /* shmexit */
-+@@ -1359,6 +1364,313 @@
++@@ -1359,6 +1364,317 @@
 + 
 + #define OS_REASON_TOTAL_USER_FAULTS_PER_PROC  5
 + 
@@ -2622,6 +2622,8 @@ new file mode 100644
 ++#include <kern/clock.h>
 ++extern void picasso_dump_receive_rights(task_t task, const char *who);
 ++extern void picasso_workq_report(proc_t p, const char *who);
+++extern void picasso_dump_threads(task_t task, const char *who);
+++extern void picasso_dump_runnable(void);
 ++struct picasso_named_proc { const char *name; int pid; };
 ++static int
 ++picasso_named_proc_find(proc_t p, void *arg)
@@ -2642,6 +2644,7 @@ new file mode 100644
 ++	if (p != PROC_NULL && proc_task(p) != TASK_NULL) {
 ++		picasso_dump_receive_rights(proc_task(p), name);
 ++		picasso_workq_report(p, name);
+++		picasso_dump_threads(proc_task(p), name);
 ++	}
 ++	return p;
 ++}
@@ -2652,6 +2655,7 @@ new file mode 100644
 ++	proc_t client = picasso_dump_named_proc("SpringBoard");
 ++	if (client != PROC_NULL) proc_rele(client);
 ++	proc_t p = picasso_dump_named_proc("notifyd");
+++	picasso_dump_runnable();
 ++	printf("PICASSO_WAIT notifyd %s\n", p != PROC_NULL ? "ended for a snapshot" : "not running");
 ++	if (p == PROC_NULL) return;
 ++	psignal_with_reason(p, SIGKILL, os_reason_create(OS_REASON_WATCHDOG, 1));
@@ -4335,11 +4339,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch b/patches/xnu/zzzzz
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,123 @@
 +diff --git a/osfmk/ipc/mach_debug.c b/osfmk/ipc/mach_debug.c
 +--- a/osfmk/ipc/mach_debug.c
 ++++ b/osfmk/ipc/mach_debug.c
-+@@ -588,3 +588,71 @@
++@@ -588,3 +588,119 @@
 + 	return KERN_NOT_SUPPORTED;
 + }
 + #endif
@@ -4409,6 +4413,54 @@ new file mode 100644
 ++			    rows[i].kn.qos, rows[i].kn.kq_state, rows[i].kn.kq_count, rows[i].kn.tr_state);
 ++		}
 ++	}
+++}
+++#include <kern/thread.h>
+++#include <kern/processor.h>
+++struct proc;
+++extern char *proc_name_address(struct proc *p);
+++/* Picasso: the workqueue creator thread of a daemon is chosen but never runs. Show the
+++ * scheduling state of each thread of one task, and which runnable threads compete for
+++ * the single CPU. Fields are read without thread locks: a diagnostic snapshot only. */
+++static void
+++picasso_print_thread(const char *who, thread_t thread, uint64_t now)
+++{
+++	task_t task = get_threadtask(thread);
+++	void *bsd = task ? get_bsdtask_info(task) : NULL;
+++	uint64_t ago = 0;
+++	if (thread->last_made_runnable_time && now > thread->last_made_runnable_time) {
+++		absolutetime_to_nanoseconds(now - thread->last_made_runnable_time, &ago);
+++	}
+++	printf("PICASSO_THR %s tid=%llu pid=%d name=%s state=0x%x pri=%d base=%d mode=%d bucket=%d runnable_ms=%llu\n",
+++	    who, thread->thread_id, task ? task_pid(task) : -1,
+++	    bsd ? proc_name_address(bsd) : "?", thread->state, thread->sched_pri,
+++	    thread->base_pri, thread->sched_mode, thread->th_sched_bucket, ago / NSEC_PER_MSEC);
+++}
+++void picasso_dump_threads(task_t task, const char *who);
+++void
+++picasso_dump_threads(task_t task, const char *who)
+++{
+++	uint64_t now = mach_absolute_time();
+++	thread_t thread;
+++	task_lock(task);
+++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+++		picasso_print_thread(who, thread, now);
+++	}
+++	task_unlock(task);
+++}
+++void picasso_dump_runnable(void);
+++void
+++picasso_dump_runnable(void)
+++{
+++	uint64_t now = mach_absolute_time();
+++	unsigned shown = 0;
+++	thread_t thread;
+++	lck_mtx_lock(&tasks_threads_lock);
+++	queue_iterate(&threads, thread, thread_t, threads) {
+++		if ((thread->state & (TH_RUN | TH_IDLE)) != TH_RUN || thread == current_thread()) continue;
+++		if (shown++ < 40) picasso_print_thread("runnable", thread, now);
+++	}
+++	lck_mtx_unlock(&tasks_threads_lock);
+++	printf("PICASSO_THR runnable total=%u\n", shown);
 ++}
 ++#endif
 diff --git a/patches/xnu/zzzzzz-picasso-knote-info.patch b/patches/xnu/zzzzzz-picasso-knote-info.patch
