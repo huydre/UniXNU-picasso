@@ -16,6 +16,7 @@ import plistlib
 import runpy
 import stat
 import struct
+import tomllib
 from types import SimpleNamespace
 from unittest import mock
 
@@ -176,8 +177,16 @@ def main():
         assert data.offline_jobs(payload) == ['com.apple.CommCenter']
 
     passes('explicit volatile telephony job policy', verify_policy_config)
+
+    def verify_board_policy():
+        board_jobs = tomllib.loads((ROOT / 'board.toml').read_text())['payload']['offline_disabled_jobs']
+        assert data.offline_jobs({**payload, 'offline_disabled_jobs': board_jobs}) == board_jobs
+
+    passes('board offline job policy', verify_board_policy)
     for name, jobs in [('watchdog exclusion', ['com.apple.watchdogd']),
-                       ('multiple services', ['com.apple.CommCenter', 'com.apple.mediaserverd']),
+                       ('notification center exclusion', ['com.apple.CommCenter', 'com.apple.notifyd']),
+                       ('protected media service', ['com.apple.CommCenter', 'com.apple.mediaserverd']),
+                       ('non-stock job', ['org.example.daemon']),
                        ('duplicate service', ['com.apple.CommCenter'] * 2),
                        ('wrong policy type', 'com.apple.CommCenter')]:
         rejected(name, lambda jobs=jobs: data.offline_jobs({**payload, 'offline_disabled_jobs': jobs}))
