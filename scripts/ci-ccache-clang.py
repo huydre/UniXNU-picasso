@@ -15,7 +15,7 @@ import sys
 
 SOURCE_SUFFIXES = ('.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.s', '.S')
 # Records read by scripts/build-arm-driver.py and scripts/build-picasso-pmgr.py.
-KEEP_GENUINE = ('/IOPlatformExpert.cpo.json',)
+KEEP_GENUINE = ('IOPlatformExpert.cpo.json',)
 TAKES_VALUE = {'-o', '-MF', '-MT', '-MQ', '-MJ', '-include', '-imacros', '-isysroot', '-arch', '-x',
                '-I', '-D', '-U', '-iquote', '-isystem', '-idirafter', '-Xclang', '-target',
                '--serialize-diagnostics'}
@@ -26,7 +26,7 @@ def main():
     if '-MJ' in args:
         at = args.index('-MJ')
         record_path = args[at + 1] if at + 1 < len(args) else None
-        if record_path and record_path.endswith(KEEP_GENUINE):
+        if record_path and os.path.basename(record_path) in KEEP_GENUINE:
             # The one record the board scripts read: clang writes it, uncached, exactly as before.
             os.execv(real, [real] + args)
         args = args[:at] + args[at + 2:]
