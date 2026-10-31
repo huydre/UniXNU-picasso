@@ -4051,11 +4051,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,105 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,90 @@
++@@ -6425,15 +6425,101 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4097,6 +4097,11 @@ new file mode 100644
 ++	unsigned picassoFbTicket = 0;
 ++	void *picassoSwap = NULL;
 ++	const void *picassoSavedInput = NULL;
+++	/* Diagnostic: IOSurface root calls that fail, with their argument shape. */
+++	static unsigned picassoSurfaceFailures;
+++	bool picassoSurface = !strncmp(getMetaClass()->getClassName(), "IOSurfaceRootUserClient", 23);
+++	uint32_t picassoShape[4] = {args->scalarInputCount, args->scalarOutputCount,
+++	    args->structureInputSize, args->structureOutputSize};
 ++	if (!strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
 ++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
 ++		if (value < 160) {
@@ -4141,6 +4146,12 @@ new file mode 100644
 ++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);
+++	}
+++	if (picassoSurface && ret && __atomic_fetch_add(&picassoSurfaceFailures, 1, __ATOMIC_RELAXED) < 200) {
+++		char name[32] = "?";
+++		proc_name(proc_selfpid(), name, sizeof(name));
+++		printf("PICASSO_SURF name=%s selector=%u sin=%u sout=%u in=%u out=%u ret=%x\n", name, selector,
+++		    picassoShape[0], picassoShape[1], picassoShape[2], picassoShape[3], ret);
 ++	}
 ++#endif
 + 
