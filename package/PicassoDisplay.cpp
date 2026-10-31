@@ -7,6 +7,7 @@
 #include <IOKit/IOUserClient.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSSymbol.h>
 #include <mach/kmod.h>
 #include <pexpert/pexpert.h>
 #include "PicassoGop.h"
@@ -14,6 +15,8 @@
 extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
 void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
+void picasso_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_PicassoAccelerator.cpp");
+IOService *picasso_accelerator_allocate(void);
 void picasso_keystore_probe(void);
 IOService *native_legacy_display_allocate(void);
 kern_return_t OSKextLoadKextWithIdentifier(const char *);
@@ -151,6 +154,35 @@ extern "C" void native_legacy_display_probe(void) {
     pendingDisplay = display;
 }
 
+// Without an IOAcceleratorES, backboardd never composes a frame. Publish the
+// empty one only when the GOP display started and no real class exists;
+// boot-arg picasso-accel-stub=0 leaves it out.
+static void publishAcceleratorStub(void) {
+    unsigned requested = 1;
+    PE_parse_boot_argn("picasso-accel-stub", &requested, sizeof(requested));
+    if (requested != 1) { IOLog("PICASSO_ACCEL disabled by boot-arg\n"); return; }
+    const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
+    bool absent = name && !OSMetaClass::getMetaClassWithName(name);
+    OSSafeReleaseNULL(name);
+    IOService *provider = IOService::getResourceService();
+    if (!absent || !provider) {
+        IOLog("PICASSO_ACCEL publish refused class_absent=%u provider=%u\n", absent, provider != nullptr); return;
+    }
+    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+    if (!handle) { IOLog("PICASSO_ACCEL preModLoad failed\n"); return; }
+    picasso_accelerator_static_init();
+    OSReturn status = OSMetaClass::postModLoad(handle);
+    if (status) { IOLog("PICASSO_ACCEL metaclass result=%x\n", status); return; }
+    IOService *accel = picasso_accelerator_allocate();
+    bool initialized = accel && accel->init();
+    bool attached = initialized && accel->attach(provider);
+    bool started = attached && accel->start(provider);
+    if (!started && attached) accel->detach(provider);
+    // The registry keeps the published service alive; drop the allocation reference either way.
+    OSSafeReleaseNULL(accel);
+    IOLog("PICASSO_ACCEL published=%u\n", started);
+}
+
 extern "C" void native_legacy_display_late_probe(void) {
     picasso_keystore_probe();
     IOService *display = pendingDisplay;
@@ -192,7 +224,7 @@ extern "C" void native_legacy_display_late_probe(void) {
     report(0, 3, started, dtAttached);
     finishDisplayPolicy(started);
     OSSafeReleaseNULL(typeData); OSSafeReleaseNULL(ranges); OSSafeReleaseNULL(memory);
-    if (started) { activeDisplay = display; activeNub = nub; }
+    if (started) { activeDisplay = display; activeNub = nub; publishAcceleratorStub(); }
     else {
         if (attached) display->detach(nub);
         if (dtAttached) nub->detachFromParent(treeParent, gIODTPlane);
