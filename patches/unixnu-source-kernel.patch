@@ -1913,7 +1913,7 @@ diff --git a/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch
-@@ -0,0 +1,1941 @@
+@@ -0,0 +1,1943 @@
 +diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 +--- a/bsd/vfs/vfs_syscalls.c
 ++++ b/bsd/vfs/vfs_syscalls.c
@@ -2360,7 +2360,7 @@ new file mode 100644
 + 
 + #if SYSV_SHM
 + #include <sys/shm_internal.h>   /* shmexit */
-+@@ -1359,6 +1364,311 @@
++@@ -1359,6 +1364,313 @@
 + 
 + #define OS_REASON_TOTAL_USER_FAULTS_PER_PROC  5
 + 
@@ -2621,6 +2621,7 @@ new file mode 100644
 ++ * watchdog victim so the snapshot above records where its thread was waiting. */
 ++#include <kern/clock.h>
 ++extern void picasso_dump_receive_rights(task_t task, const char *who);
+++extern void picasso_workq_report(proc_t p, const char *who);
 ++struct picasso_named_proc { const char *name; int pid; };
 ++static int
 ++picasso_named_proc_find(proc_t p, void *arg)
@@ -2640,6 +2641,7 @@ new file mode 100644
 ++	printf("PICASSO_IPC %s pid=%d%s\n", name, want.pid, p == PROC_NULL ? " not running" : "");
 ++	if (p != PROC_NULL && proc_task(p) != TASK_NULL) {
 ++		picasso_dump_receive_rights(proc_task(p), name);
+++		picasso_workq_report(p, name);
 ++	}
 ++	return p;
 ++}
@@ -4443,6 +4445,61 @@ new file mode 100644
 ++	} else if ((kq->kq_state & KQ_WORKQ) && kn->kn_qos_index > 0 &&
 ++	    kn->kn_qos_index <= KQWQ_NBUCKETS) {
 ++		out->tr_state = kqworkq_get_request((struct kqworkq *)kq, kn->kn_qos_index)->tr_state;
+++	}
+++}
+++#endif
+diff --git a/patches/xnu/zzzzzz-picasso-workq-report.patch b/patches/xnu/zzzzzz-picasso-workq-report.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzz-picasso-workq-report.patch
+@@ -0,0 +1,50 @@
++diff --git a/bsd/pthread/pthread_workqueue.c b/bsd/pthread/pthread_workqueue.c
++--- a/bsd/pthread/pthread_workqueue.c
+++++ b/bsd/pthread/pthread_workqueue.c
++@@ -4812,3 +4812,46 @@
++ 	thread_deallocate_daemon_register_queue(&workq_deallocate_queue,
++ 	    workq_deallocate_queue_invoke);
++ }
+++
+++#if DEVELOPMENT || DEBUG
+++/* Picasso: a workloop thread request stays QUEUED while the process keeps an idle
+++ * parked thread. Print the counters the admission check uses, and its answer for
+++ * a constrained request at each QoS, to see which limit refuses the request. */
+++void picasso_workq_report(proc_t p, const char *who);
+++void
+++picasso_workq_report(proc_t p, const char *who)
+++{
+++	static const thread_qos_t qos[] = { THREAD_QOS_BACKGROUND, THREAD_QOS_UTILITY,
+++		THREAD_QOS_LEGACY, THREAD_QOS_USER_INITIATED, THREAD_QOS_USER_INTERACTIVE };
+++	uint32_t allow[5], active[5], busy[5], sched[WORKQ_NUM_BUCKETS];
+++	struct workqueue *wq = proc_get_wqptr_fast(p);
+++	if (wq == NULL) {
+++		printf("PICASSO_WQ %s no workqueue\n", who);
+++		return;
+++	}
+++	workq_lock_spin(wq);
+++	wq_thactive_t v = _wq_thactive(wq);
+++	for (unsigned i = 0; i < 5; i++) {
+++		active[i] = _wq_thactive_aggregate_downto_qos(wq, v, qos[i], &busy[i], NULL);
+++		allow[i] = workq_constrained_allowance(wq, qos[i], NULL, false);
+++	}
+++	for (unsigned i = 0; i < WORKQ_NUM_BUCKETS; i++) {
+++		sched[i] = wq->wq_thscheduled_count[i];
+++	}
+++	uint32_t reqcount = wq->wq_reqcount, nthreads = wq->wq_nthreads;
+++	uint32_t idle = wq->wq_thidlecount, scheduled = wq->wq_threads_scheduled;
+++	uint32_t constrained = wq->wq_constrained_threads_scheduled;
+++	uint32_t flags = (uint32_t)os_atomic_load(&wq->wq_flags, relaxed);
+++	bool creator = wq->wq_creator != NULL;
+++	workq_unlock(wq);
+++	printf("PICASSO_WQ %s reqcount=%u nthreads=%u idle=%u scheduled=%u constrained=%u/%u flags=0x%x creator=%u\n",
+++	    who, reqcount, nthreads, idle, scheduled, constrained, wq_max_constrained_threads,
+++	    flags, creator);
+++	printf("PICASSO_WQ %s thscheduled=%u,%u,%u,%u,%u,%u,%u\n", who, sched[0], sched[1],
+++	    sched[2], sched[3], sched[4], sched[5], sched[6]);
+++	for (unsigned i = 0; i < 5; i++) {
+++		printf("PICASSO_WQ %s qos=%u parallelism=%u active=%u busy=%u allowance=%u\n",
+++		    who, qos[i], wq_max_parallelism[_wq_bucket(qos[i])], active[i], busy[i], allow[i]);
 ++	}
 ++}
 ++#endif
