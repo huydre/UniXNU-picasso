@@ -4333,11 +4333,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch b/patches/xnu/zzzzz
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,75 @@
 +diff --git a/osfmk/ipc/mach_debug.c b/osfmk/ipc/mach_debug.c
 +--- a/osfmk/ipc/mach_debug.c
 ++++ b/osfmk/ipc/mach_debug.c
-+@@ -588,3 +588,58 @@
++@@ -588,3 +588,71 @@
 + 	return KERN_NOT_SUPPORTED;
 + }
 + #endif
@@ -4347,11 +4347,14 @@ new file mode 100644
 ++/* Picasso: a client waits forever for a reply from a daemon that sits idle. For each
 ++ * receive right of one task, show how many messages wait in its queue and how a
 ++ * receiver would be woken: port set member, kevent knote, or workloop link. */
+++struct picasso_knote_info { uint32_t sfflags, kq_count; uint16_t status, flags, kq_state; uint8_t tr_state, qos; };
+++void picasso_knote_info(struct knote *kn, struct picasso_knote_info *out);
 ++void picasso_dump_receive_rights(task_t task, const char *who);
 ++void
 ++picasso_dump_receive_rights(task_t task, const char *who)
 ++{
-++	struct { mach_port_name_t name; uint16_t count, limit; uint8_t flags; } rows[48];
+++	struct { mach_port_name_t name; uint16_t count, limit; uint8_t flags;
+++	    struct picasso_knote_info kn; } rows[48];
 ++	unsigned shown = 0, receive = 0, queued = 0;
 ++	ipc_space_t space = task->itk_space;
 ++	if (space == IS_NULL) return;
@@ -4376,6 +4379,10 @@ new file mode 100644
 ++		    (port->ip_specialreply ? 2 : 0) | (port->ip_service_port ? 4 : 0) |
 ++		    (!port->ip_specialreply && any && SLIST_FIRST(&port->ip_klist) ? 8 : 0) |
 ++		    (!port->ip_specialreply && !any ? 16 : 0);
+++		struct picasso_knote_info kn = { .tr_state = 0xfe };
+++		if (flags & 8) {
+++			picasso_knote_info(SLIST_FIRST(&port->ip_klist), &kn);
+++		}
 ++		ip_mq_unlock(port);
 ++		queued += count;
 ++		if (shown < 48 && (count || (flags & 6))) {
@@ -4383,6 +4390,7 @@ new file mode 100644
 ++			rows[shown].count = count;
 ++			rows[shown].limit = limit;
 ++			rows[shown].flags = flags;
+++			rows[shown].kn = kn;
 ++			shown++;
 ++		}
 ++	}
@@ -4393,6 +4401,48 @@ new file mode 100644
 ++		    who, rows[i].name, rows[i].count, rows[i].limit, rows[i].flags & 1,
 ++		    (rows[i].flags >> 3) & 1, (rows[i].flags >> 4) & 1, (rows[i].flags >> 1) & 1,
 ++		    (rows[i].flags >> 2) & 1);
+++		if (rows[i].flags & 8) {
+++			printf("PICASSO_IPC %s name=0x%x kn_status=0x%x kn_flags=0x%x sfflags=0x%x qos=%u kq_state=0x%x kq_count=%u tr_state=%u\n",
+++			    who, rows[i].name, rows[i].kn.status, rows[i].kn.flags, rows[i].kn.sfflags,
+++			    rows[i].kn.qos, rows[i].kn.kq_state, rows[i].kn.kq_count, rows[i].kn.tr_state);
+++		}
+++	}
+++}
+++#endif
+diff --git a/patches/xnu/zzzzzz-picasso-knote-info.patch b/patches/xnu/zzzzzz-picasso-knote-info.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzz-picasso-knote-info.patch
+@@ -0,0 +1,32 @@
++diff --git a/bsd/kern/kern_event.c b/bsd/kern/kern_event.c
++--- a/bsd/kern/kern_event.c
+++++ b/bsd/kern/kern_event.c
++@@ -9422,3 +9422,28 @@
++     "get the ID of the bound kqueue");
++ 
++ #endif /* DEVELOPMENT || DEBUG */
+++
+++#if DEVELOPMENT || DEBUG
+++/* Picasso: messages wait on a port whose knote never wakes its daemon. Report the
+++ * knote and its kqueue as they are (no locks taken; a diagnostic snapshot only). */
+++struct picasso_knote_info { uint32_t sfflags, kq_count; uint16_t status, flags, kq_state; uint8_t tr_state, qos; };
+++void picasso_knote_info(struct knote *kn, struct picasso_knote_info *out);
+++void
+++picasso_knote_info(struct knote *kn, struct picasso_knote_info *out)
+++{
+++	struct kqueue *kq = knote_get_kq(kn);
+++	out->sfflags = kn->kn_sfflags;
+++	out->status = kn->kn_status;
+++	out->flags = kn->kn_flags;
+++	out->qos = kn->kn_qos_index;
+++	out->kq_state = kq->kq_state;
+++	out->kq_count = kq->kq_count;
+++	out->tr_state = 0xff;
+++	if (kq->kq_state & KQ_WORKLOOP) {
+++		out->tr_state = ((struct kqworkloop *)kq)->kqwl_request.tr_state;
+++	} else if ((kq->kq_state & KQ_WORKQ) && kn->kn_qos_index > 0 &&
+++	    kn->kn_qos_index <= KQWQ_NBUCKETS) {
+++		out->tr_state = kqworkq_get_request((struct kqworkq *)kq, kn->kn_qos_index)->tr_state;
 ++	}
 ++}
 ++#endif
