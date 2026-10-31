@@ -112,6 +112,13 @@ extern "C" void native_legacy_surface_rejected(uint64_t width, uint64_t height, 
 extern "C" void native_legacy_transfer_observed(IOReturn status, const void *, uint64_t bytes) { report(7, status, bytes, 0, status != kIOReturnSuccess); }
 extern "C" void native_legacy_retirement_failed(IOService *) { report(9, 0, 0, 0, true); }
 extern "C" void native_legacy_retirement_observed(IOService *) { report(9, 1, 0, 0); }
+// Diagnostic: the swap geometry the validator sees (two rectangles, options, destination size).
+extern "C" void native_legacy_swap_geometry_observed(const uint32_t *a, const uint32_t *b, uint32_t o0, uint32_t o1,
+    uint32_t o2, uint32_t w, uint32_t h) {
+    static unsigned count;
+    if (takeReport(&count)) IOLog("PICASSO_DISPLAY geometry rect0=%u,%u,%u,%u rect1=%u,%u,%u,%u options=%x,%x,%x size=%ux%u\n",
+        a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], o0, o1, o2, w, h);
+}
 extern "C" void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t bytes) { report(10, ticks, bytes, 0); }
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz) { report(11, event, hz, 0); }
 extern "C" void native_legacy_frame_observed(unsigned kind, uint64_t pixels, uint64_t, uint64_t, uint64_t, uint64_t) {
