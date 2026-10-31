@@ -31,7 +31,7 @@ volatile uint64_t armcpu_ipi_selftest_sent = 0;
 // 3 GICD_TYPER, 4 IGRPMODR0, 5 ICC_PMR_EL1, 6 ICC_IGRPEN1_EL1, 7 ICC_SRE_EL1.
 volatile uint32_t armcpu_gic_boot[8];
 volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];   // per logical core: architectural timer interrupts and SGI 0 taken
-static bool gSpiIpi = false;                // boot-arg armcpu-spi-ipi=1: IPIs are software-pended SPIs 1008+core routed to that core (ICC_SGI1R_EL1 generates nothing on this board)
+static bool gSpiIpi = false;                // boot-arg armcpu-spi-ipi=1: IPIs are software-pended SPIs kIpiSpiBase+core routed to that core (ICC_SGI1R_EL1 generates nothing on this board)
 static bool gSelfIpi = false;               // boot-arg armcpu-self-ipi=1: every core sends itself SGI 0 from initCPU
 volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
 volatile uint32_t armcpu_quiesce_calls = 0,armcpu_halt_calls = 0;
@@ -91,7 +91,9 @@ OSDefineMetaClassAndStructors (ArmCpu, IOCPU)
 // Picasso supplies PPI 19. An absent ADT property keeps upstream's PPI 27.
 static uint32_t gVirtualTimerIntid = 27;
 
-static const uint32_t kIpiSpiBase = 1008;   // INTIDs 1008..1015 stand for 'IPI to logical core 0..7'
+// INTIDs 952..959 stand for 'IPI to logical core 0..7'. SM7250's GICD_TYPER.ITLinesNumber is 29, so SPIs end at
+// INTID 959 and 1008..1015 do not exist; the board DT's highest device SPI is INTID 725.
+static const uint32_t kIpiSpiBase = 952;
 
 static uint32_t read32 (uintptr_t base, unsigned offset)
 {
