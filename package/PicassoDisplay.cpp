@@ -123,9 +123,11 @@ extern "C" void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t byte
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz) { report(11, event, hz, 0); }
 extern "C" void native_legacy_frame_observed(unsigned kind, uint64_t pixels, uint64_t, uint64_t, uint64_t, uint64_t) {
     static unsigned count, frames;
-    // The first frames, then every 64th, so a change of picture after the boot logo shows.
+    // Every one of the first 200 frames, then every 64th: the pictures between the boot logo and the
+    // display-off request show whether SpringBoard drew a lock screen before backboardd turned it off.
     unsigned frame = __atomic_add_fetch(&frames, 1, __ATOMIC_RELAXED);
-    if (takeReport(&count) || frame % 64 == 0)
+    (void)count;
+    if (frame <= 200 || frame % 64 == 0)
         IOLog("PICASSO_DISPLAY frame %u kind=%u nonblack=%llu\n", frame, kind, pixels);
 }
 
