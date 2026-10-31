@@ -4051,11 +4051,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,94 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,85 @@
++@@ -6425,15 +6425,90 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4116,6 +4116,11 @@ new file mode 100644
 ++			if (__atomic_fetch_add(&picassoSwapNotes, 1, __ATOMIC_RELAXED) < 4) {
 ++				printf("PICASSO_FBUC swap record re-laid 0x%x -> 0x%x\n",
 ++				    PICASSO_IOS16_SWAP_BYTES, PICASSO_IPADOS17_SWAP_BYTES);
+++				/* Diagnostic: the nonzero iOS 16 words show which layers and surfaces were sent. */
+++				const uint32_t *words = (const uint32_t *)picassoSavedInput;
+++				for (unsigned w = 0, shown = 0; w < PICASSO_IOS16_SWAP_BYTES / 4 && shown < 96; ++w) {
+++					if (words[w]) { printf("PICASSO_FBUC swap16 +0x%03x=%08x\n", w * 4, words[w]); ++shown; }
+++				}
 ++			}
 ++		}
 ++	}
