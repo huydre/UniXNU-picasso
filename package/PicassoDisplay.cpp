@@ -5,7 +5,11 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOUserClient.h>
+#include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSSymbol.h>
 #include <kern/clock.h>
@@ -181,6 +185,41 @@ extern "C" void native_legacy_display_probe(void) {
 // Without an IOAcceleratorES, backboardd never composes a frame. Publish the
 // empty one only when the GOP display started and no real class exists;
 // boot-arg picasso-accel-stub=0 leaves it out.
+static bool setNumber(OSDictionary *dict, const char *key, uint32_t value) {
+    OSNumber *number = OSNumber::withNumber(value, 32);
+    bool ok = number && dict->setObject(key, number);
+    OSSafeReleaseNULL(number);
+    return ok;
+}
+
+// iOS 16 CoreAnimation takes the display's modes from the TimingElements and
+// ColorElements properties; a display without one is sent blank swaps only.
+// The GOP panel has exactly one mode: its scanout size at the 60 Hz vsync,
+// RGB 4:4:4 at 8 bits. Both identifiers are 1 (0 reads as "no mode").
+static void publishDisplayModes(IOService *display, uint32_t width, uint32_t height) {
+    if (display->getProperty("TimingElements")) { IOLog("PICASSO_DISPLAY modes already published\n"); return; }
+    OSDictionary *timing = OSDictionary::withCapacity(8), *horizontal = OSDictionary::withCapacity(4);
+    OSDictionary *vertical = OSDictionary::withCapacity(4), *color = OSDictionary::withCapacity(8);
+    OSArray *timings = OSArray::withCapacity(1), *colors = OSArray::withCapacity(1);
+    const uint32_t rate = 60u << 16;  // 16.16 fixed point
+    bool ok = timing && horizontal && vertical && color && timings && colors &&
+        setNumber(color, "ID", 1) && setNumber(color, "PixelEncoding", 0) && setNumber(color, "Depth", 8) &&
+        setNumber(color, "Colorimetry", 1) && setNumber(color, "EOTF", 1) && setNumber(color, "DynamicRange", 0) &&
+        setNumber(color, "Score", 1) && color->setObject("IsVirtual", kOSBooleanFalse) && colors->setObject(color) &&
+        setNumber(horizontal, "Active", width) && setNumber(horizontal, "Total", width) &&
+        setNumber(horizontal, "SyncRate", rate) && setNumber(horizontal, "PreciseSyncRate", rate) &&
+        setNumber(vertical, "Active", height) && setNumber(vertical, "Total", height) &&
+        setNumber(vertical, "SyncRate", rate) && setNumber(vertical, "PreciseSyncRate", rate) &&
+        setNumber(timing, "ID", 1) && setNumber(timing, "Score", 1) &&
+        timing->setObject("IsVirtual", kOSBooleanFalse) && timing->setObject("IsOverscanned", kOSBooleanFalse) &&
+        timing->setObject("HorizontalAttributes", horizontal) && timing->setObject("VerticalAttributes", vertical) &&
+        timing->setObject("ColorModes", colors) && timings->setObject(timing) &&
+        display->setProperty("TimingElements", timings) && display->setProperty("ColorElements", colors);
+    IOLog("PICASSO_DISPLAY modes published=%u %ux%u at 60 Hz\n", ok, width, height);
+    OSSafeReleaseNULL(timing); OSSafeReleaseNULL(horizontal); OSSafeReleaseNULL(vertical);
+    OSSafeReleaseNULL(color); OSSafeReleaseNULL(timings); OSSafeReleaseNULL(colors);
+}
+
 static void publishAcceleratorStub(void) {
     unsigned requested = 1;
     PE_parse_boot_argn("picasso-accel-stub", &requested, sizeof(requested));
@@ -248,7 +287,11 @@ extern "C" void native_legacy_display_late_probe(void) {
     report(0, 3, started, dtAttached);
     finishDisplayPolicy(started);
     OSSafeReleaseNULL(typeData); OSSafeReleaseNULL(ranges); OSSafeReleaseNULL(memory);
-    if (started) { activeDisplay = display; activeNub = nub; publishAcceleratorStub(); }
+    if (started) {
+        activeDisplay = display; activeNub = nub;
+        publishDisplayModes(display, (uint32_t)video.v_width, (uint32_t)video.v_height);
+        publishAcceleratorStub();
+    }
     else {
         if (attached) display->detach(nub);
         if (dtAttached) nub->detachFromParent(treeParent, gIODTPlane);
