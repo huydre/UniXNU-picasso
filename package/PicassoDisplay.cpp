@@ -8,6 +8,8 @@
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSSymbol.h>
+#include <kern/clock.h>
+#include <kern/thread_call.h>
 #include <mach/kmod.h>
 #include <pexpert/pexpert.h>
 #include "PicassoGop.h"
@@ -65,9 +67,31 @@ extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned s
 extern "C" void native_legacy_registration_observed(IOService *display) {
     report(1, reinterpret_cast<uintptr_t>(display), display->metaCast("IOMobileFramebuffer") != nullptr, 0);
 }
-extern "C" void native_legacy_client_enter(task_t, uint32_t type) { report(3, type, 0, 0); }
+// Diagnostic: a framebuffer newUserClient that never returns leaves the UI
+// blank without any panic. Panic after a bounded wait so the CDC stackshot
+// records where the opening thread is blocked. picasso-client-watch=0 disables it.
+static thread_call_t clientWatch;
+static uint32_t clientsInFlight;
+static void clientWatchFired(thread_call_param_t, thread_call_param_t) {
+    uint32_t pending = __atomic_load_n(&clientsInFlight, __ATOMIC_ACQUIRE);
+    if (pending) panic("PICASSO_DISPLAY newUserClient still in flight after 30 s pending=%u", pending);
+}
+extern "C" void native_legacy_client_enter(task_t, uint32_t type) {
+    report(3, type, 0, 0);
+    unsigned watch = 1;
+    PE_parse_boot_argn("picasso-client-watch", &watch, sizeof(watch));
+    if (watch != 1) return;
+    __atomic_add_fetch(&clientsInFlight, 1, __ATOMIC_ACQ_REL);
+    if (!clientWatch) clientWatch = thread_call_allocate(clientWatchFired, nullptr);
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(30, kSecondScale, &deadline);
+    if (clientWatch) thread_call_enter_delayed(clientWatch, deadline);
+}
 extern "C" void native_legacy_client_observed(IOReturn status, IOUserClient *client) {
     report(4, status, client != nullptr, 0, status != kIOReturnSuccess);
+    unsigned watch = 1;
+    PE_parse_boot_argn("picasso-client-watch", &watch, sizeof(watch));
+    if (watch == 1) __atomic_sub_fetch(&clientsInFlight, 1, __ATOMIC_ACQ_REL);
 }
 extern "C" void native_legacy_pm_observed(unsigned stage, IOReturn status, unsigned long state) {
     report(5, stage, status, state, status != kIOReturnSuccess);
