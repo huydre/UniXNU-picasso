@@ -1913,7 +1913,7 @@ diff --git a/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch
-@@ -0,0 +1,1890 @@
+@@ -0,0 +1,1926 @@
 +diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 +--- a/bsd/vfs/vfs_syscalls.c
 ++++ b/bsd/vfs/vfs_syscalls.c
@@ -2360,7 +2360,7 @@ new file mode 100644
 + 
 + #if SYSV_SHM
 + #include <sys/shm_internal.h>   /* shmexit */
-+@@ -1359,6 +1364,260 @@
++@@ -1359,6 +1364,296 @@
 + 
 + #define OS_REASON_TOTAL_USER_FAULTS_PER_PROC  5
 + 
@@ -2601,7 +2601,7 @@ new file mode 100644
 ++picasso_report_service_wait(proc_t p, int rv)
 ++{
 ++	static const char * const names[] = {
-++		"backboardd", "SpringBoard", "mediaserverd", "audiomxd"
+++		"backboardd", "SpringBoard", "mediaserverd", "notifyd"
 ++	};
 ++	static unsigned counts[4];
 ++	if (p != current_proc() || proc_task(p) != current_task() ||
@@ -2614,6 +2614,42 @@ new file mode 100644
 ++		if (ticket) picasso_service_wait_snapshot(proc_task(p), proc_getpid(p), proc_uniqueid(p), ticket);
 ++		return;
 ++	}
+++}
+++
+++/* Diagnostic: SpringBoard waits in notify_register_check for a reply that never
+++ * comes. Two minutes after the framebuffer client opens, end notifyd as a
+++ * watchdog victim so the snapshot above records where its thread was waiting. */
+++#include <kern/clock.h>
+++static int
+++picasso_notifyd_victim(proc_t p, void *arg)
+++{
+++	if (strncmp(p->p_name, "notifyd", sizeof(p->p_name))) return PROC_RETURNED;
+++	*(int *)arg = proc_getpid(p);
+++	return PROC_RETURNED_DONE;
+++}
+++static void
+++picasso_notifyd_snapshot_fire(thread_call_param_t param0, thread_call_param_t param1)
+++{
+++	(void)param0; (void)param1;
+++	int pid = 0;
+++	proc_iterate(PROC_ALLPROCLIST, picasso_notifyd_victim, &pid, NULL, NULL);
+++	printf("PICASSO_WAIT notifyd pid=%d %s\n", pid, pid ? "ended for a snapshot" : "not running");
+++	if (!pid) return;
+++	proc_t p = proc_find(pid);
+++	if (p == PROC_NULL) return;
+++	psignal_with_reason(p, SIGKILL, os_reason_create(OS_REASON_WATCHDOG, 1));
+++	proc_rele(p);
+++}
+++void picasso_notifyd_snapshot_later(void);
+++void
+++picasso_notifyd_snapshot_later(void)
+++{
+++	static int armed;
+++	if (__atomic_exchange_n(&armed, 1, __ATOMIC_ACQ_REL)) return;
+++	thread_call_t call = thread_call_allocate(picasso_notifyd_snapshot_fire, NULL);
+++	uint64_t interval = 0;
+++	nanoseconds_to_absolutetime(120ull * NSEC_PER_SEC, &interval);
+++	if (call) thread_call_enter_delayed(call, mach_absolute_time() + interval);
 ++}
 ++#endif
 ++/* PICASSO_SERVICE_WAIT_BSD_END */
@@ -4051,11 +4087,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,197 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,189 @@
++@@ -6425,15 +6425,193 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4066,6 +4102,7 @@ new file mode 100644
 ++ * waits or signals). Runs were derived from the store offsets of every
 ++ * kern_Swap and IOMobileFramebufferSwap setter in both dyld caches; the last
 ++ * three insertion points are bounded by known fields, not pinned exactly. */
+++extern "C" void picasso_notifyd_snapshot_later(void);
 ++#define PICASSO_IOS16_SWAP_BYTES 0x46c
 ++#define PICASSO_IPADOS17_SWAP_BYTES 0x508
 ++static const struct { uint16_t begin, end, shift; } picassoSwapRuns[] = {
@@ -4180,6 +4217,9 @@ new file mode 100644
 ++	}
 ++	if (!strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
 ++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
+++		if (value == 0) {
+++			picasso_notifyd_snapshot_later();
+++		}
 ++		if (value < 160) {
 ++			char name[32] = "?";
 ++			picassoFbTicket = value + 1;
@@ -4249,21 +4289,24 @@ diff --git a/patches/xnu/zzzzzz-picasso-exec-failures.patch b/patches/xnu/zzzzzz
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-exec-failures.patch
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,24 @@
 +diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +--- a/bsd/kern/kern_exec.c
 ++++ b/bsd/kern/kern_exec.c
-+@@ -2378,6 +2378,17 @@
++@@ -2378,6 +2378,20 @@
 + 		}
 + 	}
 + bad:
 ++#if DEVELOPMENT || DEBUG
 ++	/* Picasso: launch-on-demand daemons that cannot start fail silently, and their
 ++	 * clients wait forever for a reply. Name each image that fails to activate. */
-++	if (error && imgp->ip_strings) {
-++		static unsigned picassoExecFailures;
-++		if (__atomic_fetch_add(&picassoExecFailures, 1, __ATOMIC_RELAXED) < 48) {
+++	if (imgp->ip_strings) {
+++		static unsigned picassoExecFailures, picassoExecs;
+++		if (error && __atomic_fetch_add(&picassoExecFailures, 1, __ATOMIC_RELAXED) < 48) {
 ++			printf("PICASSO_EXEC failed error=%d path=%.200s\n", error,
+++			    imgp->ip_strings + strlen(EXECUTABLE_KEY));
+++		} else if (!error && __atomic_fetch_add(&picassoExecs, 1, __ATOMIC_RELAXED) < 200) {
+++			printf("PICASSO_EXEC ok pid=%d path=%.200s\n", proc_getpid(p),
 ++			    imgp->ip_strings + strlen(EXECUTABLE_KEY));
 ++		}
 ++	}
