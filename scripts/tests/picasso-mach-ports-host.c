@@ -11,7 +11,8 @@ typedef unsigned int mach_msg_type_number_t;
 struct port { int ip_immovable_send; int refs; };
 typedef struct port *ipc_port_t;
 typedef ipc_port_t mach_port_t;
-typedef mach_port_t *mach_port_array_t;
+typedef struct { mach_port_t port; } mach_port_ool_t;
+typedef mach_port_ool_t *mach_port_array_t;
 #define TASK_PORT_REGISTER_MAX 3
 #define KERN_SUCCESS 0
 #define KERN_INVALID_ARGUMENT 4
@@ -43,6 +44,8 @@ static void free_array(void *p, size_t count)
 }
 #define kalloc_type(type, count, flags) ((type *)alloc_array(count, sizeof(type), flags))
 #define kfree_type(type, count, p) free_array(p, count)
+#define mach_port_array_alloc(count, flags) ((mach_port_array_t)alloc_array(count, sizeof(mach_port_ool_t), flags))
+#define mach_port_array_free(p, count) free_array(p, count)
 static void itk_lock(task_t task)
 {
     assert(!task->locked);
@@ -68,7 +71,7 @@ static ipc_port_t ipc_port_copy_send_any(ipc_port_t p)
 
 static void drop_result(mach_port_array_t p, unsigned count)
 {
-    for (unsigned i = 0; i < count; i++) { ipc_port_release_send(p[i]); }
+    for (unsigned i = 0; i < count; i++) { ipc_port_release_send(p[i].port); }
     free_array(p, count);
 }
 int main(void)
@@ -79,13 +82,13 @@ int main(void)
         for (unsigned pattern = 0; pattern < 64; pattern++) {
             struct port a = {0, 1}, b = {0, 1}, old = {0, 3};
             struct task task = {1, 0, {&old, &old, &old}};
-            mach_port_array_t input = count ? kalloc_type(mach_port_t, count, 7) : NULL;
+            mach_port_array_t input = count ? mach_port_array_alloc(count, 7) : NULL;
             ipc_port_t expected[3] = {0};
             unsigned refs_a = 1, refs_b = 1;
             for (unsigned i = 0; i < count; i++) {
                 ipc_port_t options[] = {IP_NULL, IP_DEAD, &a, &b};
                 expected[i] = options[(pattern >> (i * 2)) & 3];
-                input[i] = ipc_port_copy_send_any(expected[i]);
+                input[i].port = ipc_port_copy_send_any(expected[i]);
                 if (expected[i] == &a) { refs_a++; }
                 if (expected[i] == &b) { refs_b++; }
             }
@@ -119,8 +122,8 @@ int main(void)
     for (unsigned scenario = 0; scenario < 7; scenario++) {
         struct port old = {0, 3}, supplied = {0, 3};
         struct task task = {1, 0, {&old, &old, &old}};
-        mach_port_array_t input = kalloc_type(mach_port_t, 3, 7);
-        for (unsigned i = 0; i < 3; i++) { input[i] = &supplied; }
+        mach_port_array_t input = mach_port_array_alloc(3, 7);
+        for (unsigned i = 0; i < 3; i++) { input[i].port = &supplied; }
         task_t target = &task;
         unsigned count = 3;
         mach_port_array_t argument = input;
@@ -130,7 +133,7 @@ int main(void)
         if (scenario == 3) { count = UINT32_MAX; }
         if (scenario == 4) { argument = NULL; }
         if (scenario == 5) { supplied.ip_immovable_send = 1; }
-        if (scenario == 6) { input[0] = IP_DEAD; supplied.refs = 2; supplied.ip_immovable_send = 1; }
+        if (scenario == 6) { input[0].port = IP_DEAD; supplied.refs = 2; supplied.ip_immovable_send = 1; }
         unsigned before_frees = frees;
         int expected = scenario >= 5 ? KERN_INVALID_RIGHT : KERN_INVALID_ARGUMENT;
         assert(mach_ports_register(target, argument, count) == expected);

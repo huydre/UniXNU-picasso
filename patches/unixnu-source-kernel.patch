@@ -4012,11 +4012,11 @@ new file mode 100644
 ++		return KERN_INVALID_ARGUMENT;
 ++	}
 ++	for (mach_msg_type_number_t i = 0; i < portsCnt; i++) {
-++		ports[i] = memory[i];
+++		ports[i] = memory[i].port;
 ++	}
 ++	kr = _kernelrpc_mach_ports_register3(task, ports[0], ports[1], ports[2]);
 ++	if (kr == KERN_SUCCESS && portsCnt != 0) {
-++		kfree_type(mach_port_t, portsCnt, memory);
+++		mach_port_array_free(memory, portsCnt);
 ++	}
 ++	return kr;
 ++}
@@ -4027,17 +4027,17 @@ new file mode 100644
 ++	mach_port_array_t       *portsp,
 ++	mach_msg_type_number_t  *portsCnt)
 ++{
-++	ipc_port_t *ports;
+++	mach_port_array_t ports;
 ++	kern_return_t kr;
 ++
 ++	if (task == TASK_NULL) {
 ++		return KERN_INVALID_ARGUMENT;
 ++	}
-++	ports = kalloc_type(ipc_port_t, TASK_PORT_REGISTER_MAX,
+++	ports = mach_port_array_alloc(TASK_PORT_REGISTER_MAX,
 ++	    Z_WAITOK | Z_ZERO | Z_NOFAIL);
-++	kr = _kernelrpc_mach_ports_lookup3(task, &ports[0], &ports[1], &ports[2]);
+++	kr = _kernelrpc_mach_ports_lookup3(task, &ports[0].port, &ports[1].port, &ports[2].port);
 ++	if (kr != KERN_SUCCESS) {
-++		kfree_type(ipc_port_t, TASK_PORT_REGISTER_MAX, ports);
+++		mach_port_array_free(ports, TASK_PORT_REGISTER_MAX);
 ++		return kr;
 ++	}
 ++	*portsp = ports;
