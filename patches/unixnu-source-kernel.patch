@@ -4047,3 +4047,49 @@ new file mode 100644
 +-
 ++
 + static kern_return_t
+diff --git a/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch b/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch
+@@ -0,0 +1,41 @@
++diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
++--- a/iokit/Kernel/IOUserClient.cpp
+++++ b/iokit/Kernel/IOUserClient.cpp
++@@ -6425,15 +6425,37 @@
++ IOReturn
++ IOUserClient::callExternalMethod(uint32_t selector, IOExternalMethodArguments * args)
++ {
++ 	IOReturn ret;
+++#if DEVELOPMENT || DEBUG
+++	/* Picasso: bounded trace of framebuffer user-client selectors. An entry without
+++	 * a matching done line marks the call that blocks the compositor. */
+++	static unsigned picassoFbCalls;
+++	unsigned picassoFbTicket = 0;
+++	if (strstr(getMetaClass()->getClassName(), "IOMobileFramebuffer")) {
+++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
+++		if (value < 160) {
+++			char name[32] = "?";
+++			picassoFbTicket = value + 1;
+++			proc_name(proc_selfpid(), name, sizeof(name));
+++			printf("PICASSO_FBUC call=%u pid=%d name=%s selector=%u sin=%u sout=%u in=%u out=%u\n",
+++			    picassoFbTicket, proc_selfpid(), name, selector, args->scalarInputCount,
+++			    args->scalarOutputCount, args->structureInputSize, args->structureOutputSize);
+++		}
+++	}
+++#endif
++ 
++ 	ipcEnter(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
++ 	if (uc2022) {
++ 		ret = ((IOUserClient2022 *) this)->externalMethod(selector, (IOExternalMethodArgumentsOpaque *) args);
++ 	} else {
++ 		ret = externalMethod(selector, args);
++ 	}
++ 	ipcExit(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
+++#if DEVELOPMENT || DEBUG
+++	if (picassoFbTicket) {
+++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);
+++	}
+++#endif
++ 
++ 	return ret;
++ }
