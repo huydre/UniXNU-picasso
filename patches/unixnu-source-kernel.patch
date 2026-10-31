@@ -4065,7 +4065,7 @@ new file mode 100644
 ++	 * a matching done line marks the call that blocks the compositor. */
 ++	static unsigned picassoFbCalls;
 ++	unsigned picassoFbTicket = 0;
-++	if (strstr(getMetaClass()->getClassName(), "IOMobileFramebuffer")) {
+++	if (!strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
 ++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
 ++		if (value < 160) {
 ++			char name[32] = "?";
