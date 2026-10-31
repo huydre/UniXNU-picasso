@@ -515,6 +515,12 @@ void ArmCpu::startThread (void *argument, wait_result_t)
   const uint32_t id = self->logicalId;
   IOLog ("ArmCpu: CPU %u start kr=%d step=%u fail=%u psci=%d mpidr=0x%x running=%u\n", id, status,
       armcpu_smp_step[id], armcpu_smp_fail[id], armcpu_smp_psci_rc[id], armcpu_smp_seen_mpidr[id], armcpu_smp_running);
+  // processor_start returns once CPU_ON is issued; report where the core actually got to a few seconds later,
+  // and whether it takes timer interrupts and SGIs (the IPIs a stackshot or scheduler sends it).
+  IOSleep (5000);
+  IOLog ("ArmCpu: CPU %u after 5s step=%u fail=%u mpidr=0x%x timer=%u sgi=%u running=%u ipi_sent=%llu\n", id,
+      armcpu_smp_step[id], armcpu_smp_fail[id], armcpu_smp_seen_mpidr[id], armcpu_core_timer[id & 7],
+      armcpu_core_sgi[id & 7], armcpu_smp_running, armcpu_ipi_sent);
   thread_terminate (current_thread ());
 }
 
