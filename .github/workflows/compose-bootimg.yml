@@ -45,7 +45,6 @@ jobs:
           python-version: "3.12"
 
       - name: Check iPhone X inputs and retained kernel backend
-        if: ${{ !inputs.fast }}
         run: |
           python3 scripts/check-picasso-target.py --require-build-inputs \
             --output out/picasso/logs/target-readiness.json --github-env "$GITHUB_ENV"
