@@ -6,7 +6,8 @@
 Runs the upstream scripts/seed-data-skip-setup.py with this board's userland build and version
 (picasso_target) instead of the iPadOS 17.7.11 / 21H461 pair it carries. com.apple.migration's
 LastSystemVersion must name the system that boots: a mismatch makes the data migrator run on every
-boot before SpringBoard can show anything. Everything else is the upstream tool unchanged.
+boot before SpringBoard can show anything. SpringBoard also gets BSUIVibrancyEffectViewDisabled
+for the software renderer. Everything else is the upstream tool unchanged.
 """
 import importlib.util
 from pathlib import Path
@@ -22,6 +23,17 @@ def main():
     tool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool)
     tool.BUILD, tool.VERSION = target.BUILD, target.VERSION
+    # No GPU here: CoreAnimation's software renderer draws a "vibrant" view (the lock screen's
+    # clock) as a red mask over an untoned wallpaper. BSUIVibrancyEffectViewDisabled makes such
+    # views draw their content as it is, as HackiOS sets it for SpringBoard without a GPU.
+    merge_pref = tool.merge_pref
+
+    def merge_springboard_pref(var, name, values):
+        if name == 'com.apple.springboard':
+            values = {**values, 'BSUIVibrancyEffectViewDisabled': True}
+        merge_pref(var, name, values)
+
+    tool.merge_pref = merge_springboard_pref
     print(f'picasso: Setup marked done for {target.PRODUCT} {target.VERSION} ({target.BUILD})')
     tool.main()
 
