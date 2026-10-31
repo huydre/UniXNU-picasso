@@ -4118,11 +4118,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,207 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,193 @@
++@@ -6425,15 +6425,203 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4290,6 +4290,16 @@ new file mode 100644
 ++		args->structureInput = picassoSavedInput;
 ++		args->structureInputSize = PICASSO_IOS16_SWAP_BYTES;
 ++		IOFreeData(picassoSwap, PICASSO_IPADOS17_SWAP_BYTES);
+++	}
+++	/* Selector 12 is kern_RequestPowerChange (one scalar: the requested display power
+++	 * state). The panel is lit by the firmware's GOP framebuffer and has no power
+++	 * switch here; the retained family refuses the request, after which backboardd
+++	 * stops presenting. Accept it as already satisfied. */
+++	if (selector == 12 && ret == kIOReturnUnsupported && args->scalarInputCount == 1 &&
+++	    !strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
+++		printf("PICASSO_FBUC power change to %llu accepted (panel stays lit)\n",
+++		    (unsigned long long)args->scalarInput[0]);
+++		ret = kIOReturnSuccess;
 ++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);
