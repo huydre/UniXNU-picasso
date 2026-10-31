@@ -2578,7 +2578,7 @@ new file mode 100644
 ++{
 ++	static const char * const names[] = {
 ++		"backboardd", "SpringBoard", "mediaserverd", "audiomxd",
-++		"CommCenter", "powerd", "mobiletimerd", "liveactivitiesd"
+++		"notifyd", "powerd", "mobiletimerd", "liveactivitiesd"
 ++	};
 ++	static unsigned counts[8];
 ++	for (unsigned index = 0; index < 8; ++index) {
