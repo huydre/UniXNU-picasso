@@ -4245,3 +4245,29 @@ new file mode 100644
 + 
 + 	return ret;
 + }
+diff --git a/patches/xnu/zzzzzz-picasso-exec-failures.patch b/patches/xnu/zzzzzz-picasso-exec-failures.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzz-picasso-exec-failures.patch
+@@ -0,0 +1,21 @@
++diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
++--- a/bsd/kern/kern_exec.c
+++++ b/bsd/kern/kern_exec.c
++@@ -2378,6 +2378,17 @@
++ 		}
++ 	}
++ bad:
+++#if DEVELOPMENT || DEBUG
+++	/* Picasso: launch-on-demand daemons that cannot start fail silently, and their
+++	 * clients wait forever for a reply. Name each image that fails to activate. */
+++	if (error && imgp->ip_strings) {
+++		static unsigned picassoExecFailures;
+++		if (__atomic_fetch_add(&picassoExecFailures, 1, __ATOMIC_RELAXED) < 48) {
+++			printf("PICASSO_EXEC failed error=%d path=%.200s\n", error,
+++			    imgp->ip_strings + strlen(EXECUTABLE_KEY));
+++		}
+++	}
+++#endif
++ 	proc_transend(p, 0);
++ 
++ bad_notrans:
