@@ -1913,7 +1913,7 @@ diff --git a/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzz-picasso-launchd-diagnostics.patch
-@@ -0,0 +1,1926 @@
+@@ -0,0 +1,1941 @@
 +diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
 +--- a/bsd/vfs/vfs_syscalls.c
 ++++ b/bsd/vfs/vfs_syscalls.c
@@ -2360,7 +2360,7 @@ new file mode 100644
 + 
 + #if SYSV_SHM
 + #include <sys/shm_internal.h>   /* shmexit */
-+@@ -1359,6 +1364,296 @@
++@@ -1359,6 +1364,311 @@
 + 
 + #define OS_REASON_TOTAL_USER_FAULTS_PER_PROC  5
 + 
@@ -2620,22 +2620,37 @@ new file mode 100644
 ++ * comes. Two minutes after the framebuffer client opens, end notifyd as a
 ++ * watchdog victim so the snapshot above records where its thread was waiting. */
 ++#include <kern/clock.h>
+++extern void picasso_dump_receive_rights(task_t task, const char *who);
+++struct picasso_named_proc { const char *name; int pid; };
 ++static int
-++picasso_notifyd_victim(proc_t p, void *arg)
+++picasso_named_proc_find(proc_t p, void *arg)
 ++{
-++	if (strncmp(p->p_name, "notifyd", sizeof(p->p_name))) return PROC_RETURNED;
-++	*(int *)arg = proc_getpid(p);
+++	struct picasso_named_proc *want = arg;
+++	if (strncmp(p->p_name, want->name, sizeof(p->p_name))) return PROC_RETURNED;
+++	want->pid = proc_getpid(p);
 ++	return PROC_RETURNED_DONE;
+++}
+++/* Print the receive queues of one named process; returns it with a reference. */
+++static proc_t
+++picasso_dump_named_proc(const char *name)
+++{
+++	struct picasso_named_proc want = { name, 0 };
+++	proc_iterate(PROC_ALLPROCLIST, picasso_named_proc_find, &want, NULL, NULL);
+++	proc_t p = want.pid ? proc_find(want.pid) : PROC_NULL;
+++	printf("PICASSO_IPC %s pid=%d%s\n", name, want.pid, p == PROC_NULL ? " not running" : "");
+++	if (p != PROC_NULL && proc_task(p) != TASK_NULL) {
+++		picasso_dump_receive_rights(proc_task(p), name);
+++	}
+++	return p;
 ++}
 ++static void
 ++picasso_notifyd_snapshot_fire(thread_call_param_t param0, thread_call_param_t param1)
 ++{
 ++	(void)param0; (void)param1;
-++	int pid = 0;
-++	proc_iterate(PROC_ALLPROCLIST, picasso_notifyd_victim, &pid, NULL, NULL);
-++	printf("PICASSO_WAIT notifyd pid=%d %s\n", pid, pid ? "ended for a snapshot" : "not running");
-++	if (!pid) return;
-++	proc_t p = proc_find(pid);
+++	proc_t client = picasso_dump_named_proc("SpringBoard");
+++	if (client != PROC_NULL) proc_rele(client);
+++	proc_t p = picasso_dump_named_proc("notifyd");
+++	printf("PICASSO_WAIT notifyd %s\n", p != PROC_NULL ? "ended for a snapshot" : "not running");
 ++	if (p == PROC_NULL) return;
 ++	psignal_with_reason(p, SIGKILL, os_reason_create(OS_REASON_WATCHDOG, 1));
 ++	proc_rele(p);
@@ -4314,3 +4329,70 @@ new file mode 100644
 + 	proc_transend(p, 0);
 + 
 + bad_notrans:
+diff --git a/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
+new file mode 100644
+--- /dev/null
++++ b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
+@@ -0,0 +1,62 @@
++diff --git a/osfmk/ipc/mach_debug.c b/osfmk/ipc/mach_debug.c
++--- a/osfmk/ipc/mach_debug.c
+++++ b/osfmk/ipc/mach_debug.c
++@@ -588,3 +588,58 @@
++ 	return KERN_NOT_SUPPORTED;
++ }
++ #endif
+++
+++#if DEVELOPMENT || DEBUG
+++#include <kern/task.h>
+++/* Picasso: a client waits forever for a reply from a daemon that sits idle. For each
+++ * receive right of one task, show how many messages wait in its queue and how a
+++ * receiver would be woken: port set member, kevent knote, or workloop link. */
+++void picasso_dump_receive_rights(task_t task, const char *who);
+++void
+++picasso_dump_receive_rights(task_t task, const char *who)
+++{
+++	struct { mach_port_name_t name; uint16_t count, limit; uint8_t flags; } rows[48];
+++	unsigned shown = 0, receive = 0, queued = 0;
+++	ipc_space_t space = task->itk_space;
+++	if (space == IS_NULL) return;
+++	is_read_lock(space);
+++	if (!is_active(space)) {
+++		is_read_unlock(space);
+++		return;
+++	}
+++	ipc_entry_table_t table = is_active_table(space);
+++	ipc_entry_num_t tsize = ipc_entry_table_count(table);
+++	for (mach_port_index_t index = 1; index < tsize; index++) {
+++		ipc_entry_t entry = ipc_entry_table_get_nocheck(table, index);
+++		ipc_entry_bits_t bits = entry->ie_bits;
+++		if (!(IE_BITS_TYPE(bits) & MACH_PORT_TYPE_RECEIVE)) continue;
+++		ipc_port_t port = ip_object_to_port(entry->ie_object);
+++		receive++;
+++		ip_mq_lock(port);
+++		uint16_t count = port->ip_messages.imq_msgcount;
+++		uint16_t limit = port->ip_messages.imq_qlimit;
+++		bool any = port->ip_sync_link_state == PORT_SYNC_LINK_ANY;
+++		uint8_t flags = (ip_in_pset(port) ? 1 : 0) |
+++		    (port->ip_specialreply ? 2 : 0) | (port->ip_service_port ? 4 : 0) |
+++		    (!port->ip_specialreply && any && SLIST_FIRST(&port->ip_klist) ? 8 : 0) |
+++		    (!port->ip_specialreply && !any ? 16 : 0);
+++		ip_mq_unlock(port);
+++		queued += count;
+++		if (shown < 48 && (count || (flags & 6))) {
+++			rows[shown].name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
+++			rows[shown].count = count;
+++			rows[shown].limit = limit;
+++			rows[shown].flags = flags;
+++			shown++;
+++		}
+++	}
+++	is_read_unlock(space);
+++	printf("PICASSO_IPC %s receive=%u queued=%u\n", who, receive, queued);
+++	for (unsigned i = 0; i < shown; i++) {
+++		printf("PICASSO_IPC %s name=0x%x msgs=%u qlimit=%u pset=%u knote=%u workloop=%u srp=%u service=%u\n",
+++		    who, rows[i].name, rows[i].count, rows[i].limit, rows[i].flags & 1,
+++		    (rows[i].flags >> 3) & 1, (rows[i].flags >> 4) & 1, (rows[i].flags >> 1) & 1,
+++		    (rows[i].flags >> 2) & 1);
+++	}
+++}
+++#endif
