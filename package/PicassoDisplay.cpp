@@ -97,14 +97,16 @@ static void finishDisplayPolicy(bool keep) {
     scaleAdded = rotationAdded = false;
 }
 
-static bool matchWord(IORegistryEntry *entry, const char *key, uint32_t value, bool &added) {
+// With adoptExisting, a nonzero value already published in the device tree wins over the default.
+static bool matchWord(IORegistryEntry *entry, const char *key, uint32_t value, bool &added,
+                      bool adoptExisting = false) {
     OSObject *old = entry->getProperty(key);
     if (old) {
         OSData *data = OSDynamicCast(OSData, old);
         uint32_t actual = 0;
         if (!data || data->getLength() != sizeof(actual)) return false;
         memcpy(&actual, data->getBytesNoCopy(), sizeof(actual));
-        return actual == value;
+        return adoptExisting ? actual != 0 : actual == value;
     }
     OSData *data = OSData::withBytes(&value, sizeof(value));
     bool ok = data && entry->setProperty(key, data);
@@ -119,13 +121,17 @@ extern "C" bool native_legacy_gop_mapping_observed(IOService *, IOMemoryMap *map
         width != video.v_width || height != video.v_height) return false;
     if (displayChosen) return false;
     displayChosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
-    // Two scanout pixels per UI point. This is UI policy, not physical DPI.
-    bool ok = displayChosen && matchWord(displayChosen, "display-scale", 2, scaleAdded) &&
+    // Default to two scanout pixels per UI point; the iPhone X device tree carries three and keeps it.
+    // This is UI policy, not physical DPI.
+    bool ok = displayChosen && matchWord(displayChosen, "display-scale", 2, scaleAdded, true) &&
         matchWord(displayChosen, "display-rotation", 0, rotationAdded);
     if (!ok) finishDisplayPolicy(false);
-    IOLog("PICASSO_DISPLAY mapped ok=%u base=%llx bytes=%llx width=%u height=%u stride=%lu depth=%lu console=%lu scale=2\n",
+    uint32_t scale = 0;
+    OSData *scaleData = displayChosen ? OSDynamicCast(OSData, displayChosen->getProperty("display-scale")) : nullptr;
+    if (scaleData && scaleData->getLength() == sizeof(scale)) memcpy(&scale, scaleData->getBytesNoCopy(), sizeof(scale));
+    IOLog("PICASSO_DISPLAY mapped ok=%u base=%llx bytes=%llx width=%u height=%u stride=%lu depth=%lu console=%lu scale=%u\n",
         ok, map->getPhysicalAddress(), map->getLength(), width, height,
-        video.v_rowBytes, video.v_depth, video.v_display);
+        video.v_rowBytes, video.v_depth, video.v_display, scale);
     return ok;
 }
 
