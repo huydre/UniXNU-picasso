@@ -4349,11 +4349,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch b/patches/xnu/zzzzz
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,166 @@
 +diff --git a/osfmk/ipc/mach_debug.c b/osfmk/ipc/mach_debug.c
 +--- a/osfmk/ipc/mach_debug.c
 ++++ b/osfmk/ipc/mach_debug.c
-+@@ -588,3 +588,160 @@
++@@ -588,3 +588,162 @@
 + 	return KERN_NOT_SUPPORTED;
 + }
 + #endif
@@ -4448,8 +4448,8 @@ new file mode 100644
 ++#if __arm64__
 ++#include <arm/thread.h>
 ++#include <arm/proc_reg.h>
-++/* Frame-pointer walk of a thread blocked in the kernel: its user registers were
-++ * saved on entry and its stack does not move. Reads go through the task's map. */
+++/* Frame-pointer walk of a thread that is off-CPU: its user registers were saved
+++ * on kernel entry and its stack does not move. Reads go through the task's map. */
 ++static void
 ++picasso_print_user_stack(const char *who, thread_t thread)
 ++{
@@ -4485,7 +4485,9 @@ new file mode 100644
 ++	    (unsigned long long)task->mach_header_vm_address, task->task_shared_region_slide);
 ++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 ++		picasso_print_thread(who, thread, now);
-++		if (count < 16 && (thread->state & TH_WAIT)) {
+++		/* With one CPU, every other thread is off-CPU while this runs, so a runnable
+++		 * thread's user registers are saved too (it was preempted). */
+++		if (count < 16 && thread != current_thread()) {
 ++			thread_reference(thread);
 ++			held[count++] = thread;
 ++		}
