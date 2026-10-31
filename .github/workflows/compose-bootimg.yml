@@ -104,7 +104,8 @@ jobs:
           # added to PATH below); MakeInc.cmd keeps CC/CXX that come from the environment.
           mkdir -p "$RUNNER_TEMP/ccache-bin"
           for tool in clang clang++; do
-            printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$(xcrun -sdk iphoneos -find "$tool")" > "$RUNNER_TEMP/ccache-bin/$tool"
+            # scripts/ci-ccache-clang.py drops XNU's -MJ (ccache refuses it) except for the one record read later.
+            printf '#!/bin/sh\nexec python3 -I "%s" "%s" "$@"\n' "$GITHUB_WORKSPACE/device/scripts/ci-ccache-clang.py" "$(xcrun -sdk iphoneos -find "$tool")" > "$RUNNER_TEMP/ccache-bin/$tool"
             chmod +x "$RUNNER_TEMP/ccache-bin/$tool"
           done
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
