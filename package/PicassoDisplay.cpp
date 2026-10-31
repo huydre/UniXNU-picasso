@@ -122,8 +122,11 @@ extern "C" void native_legacy_swap_geometry_observed(const uint32_t *a, const ui
 extern "C" void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t bytes) { report(10, ticks, bytes, 0); }
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz) { report(11, event, hz, 0); }
 extern "C" void native_legacy_frame_observed(unsigned kind, uint64_t pixels, uint64_t, uint64_t, uint64_t, uint64_t) {
-    static unsigned count;
-    if (takeReport(&count)) IOLog("PICASSO_DISPLAY frame kind=%u nonblack=%llu\n", kind, pixels);
+    static unsigned count, frames;
+    // The first frames, then every 64th, so a change of picture after the boot logo shows.
+    unsigned frame = __atomic_add_fetch(&frames, 1, __ATOMIC_RELAXED);
+    if (takeReport(&count) || frame % 64 == 0)
+        IOLog("PICASSO_DISPLAY frame %u kind=%u nonblack=%llu\n", frame, kind, pixels);
 }
 
 static void finishDisplayPolicy(bool keep) {

@@ -173,6 +173,10 @@ volume = "PICASSOESP"
 # No native telephony backend is selected. A fresh volatile Data seed skips
 # both stock CommCenter variants by their shared label; watchdogd stays enabled.
 offline_disabled_jobs = ["com.apple.CommCenter"]
+# --skip-setup: Setup and per-boot data migration are skipped, and the display does
+# not dim or sleep (the board has no input yet). The wrapper names the iOS userland.
+skip_setup_tool = "scripts/picasso-seed-skip-setup.py"
+skip_setup_args = ["--no-auto-dim"]
 # Room for the kernel, original trust caches and packed APFS Data seed.
 # The payload builder retains its 95% content limit; CI checks the actual seed.
 size_mib = 60
