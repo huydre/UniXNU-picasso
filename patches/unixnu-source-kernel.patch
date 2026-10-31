@@ -4047,24 +4047,56 @@ new file mode 100644
 +-
 ++
 + static kern_return_t
-diff --git a/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch b/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch
+diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
 new file mode 100644
 --- /dev/null
-+++ b/patches/xnu/zzzzzz-picasso-framebuffer-method-trace.patch
-@@ -0,0 +1,41 @@
++++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
+@@ -0,0 +1,89 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,37 @@
++@@ -6425,15 +6425,85 @@
+++#if DEVELOPMENT || DEBUG
+++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
+++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
+++ * grew from 0x46c to 0x508 bytes: iPadOS 17 inserts event wait/signal values
+++ * at 0x50 and their mach ports at 0x260, plus a few bytes near brightness,
+++ * EDR and ambient-light fields. Each run below keeps the iOS 16 bytes and
+++ * moves them to their iPadOS 17 offset; inserted fields stay zero (no event
+++ * waits or signals). Runs were derived from the store offsets of every
+++ * kern_Swap and IOMobileFramebufferSwap setter in both dyld caches; the last
+++ * three insertion points are bounded by known fields, not pinned exactly. */
+++#define PICASSO_IOS16_SWAP_BYTES 0x46c
+++#define PICASSO_IPADOS17_SWAP_BYTES 0x508
+++static const struct { uint16_t begin, end, shift; } picassoSwapRuns[] = {
+++	{0x000, 0x050, 0x00}, {0x050, 0x260, 0x48}, {0x260, 0x2e6, 0x6c}, {0x2e6, 0x2e8, 0x6d},
+++	{0x2e8, 0x30c, 0x70}, {0x30c, 0x37b, 0x78}, {0x37b, 0x467, 0x7c}, {0x467, 0x46c, 0x9c},
+++};
+++static void *
+++picasso_ios16_swap(const void *record)
+++{
+++	uint8_t *out = (uint8_t *)IOMallocZeroData(PICASSO_IPADOS17_SWAP_BYTES);
+++	if (!out) return NULL;
+++	for (size_t i = 0; i < sizeof(picassoSwapRuns) / sizeof(picassoSwapRuns[0]); ++i) {
+++		memcpy(out + picassoSwapRuns[i].begin + picassoSwapRuns[i].shift,
+++		    (const uint8_t *)record + picassoSwapRuns[i].begin,
+++		    picassoSwapRuns[i].end - picassoSwapRuns[i].begin);
+++	}
+++	return out;
+++}
+++#endif
+++
 + IOReturn
 + IOUserClient::callExternalMethod(uint32_t selector, IOExternalMethodArguments * args)
 + {
 + 	IOReturn ret;
 ++#if DEVELOPMENT || DEBUG
-++	/* Picasso: bounded trace of framebuffer user-client selectors. An entry without
-++	 * a matching done line marks the call that blocks the compositor. */
-++	static unsigned picassoFbCalls;
+++	/* Bounded trace of framebuffer user-client selectors. An entry without a
+++	 * matching done line marks the call that blocks the compositor. */
+++	static unsigned picassoFbCalls, picassoSwapNotes;
 ++	unsigned picassoFbTicket = 0;
+++	void *picassoSwap = NULL;
+++	const void *picassoSavedInput = NULL;
 ++	if (!strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
 ++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
 ++		if (value < 160) {
@@ -4074,6 +4106,17 @@ new file mode 100644
 ++			printf("PICASSO_FBUC call=%u pid=%d name=%s selector=%u sin=%u sout=%u in=%u out=%u\n",
 ++			    picassoFbTicket, proc_selfpid(), name, selector, args->scalarInputCount,
 ++			    args->scalarOutputCount, args->structureInputSize, args->structureOutputSize);
+++		}
+++		if (selector == 5 && args->structureInputSize == PICASSO_IOS16_SWAP_BYTES &&
+++		    args->structureInput && !args->structureInputDescriptor &&
+++		    (picassoSwap = picasso_ios16_swap(args->structureInput))) {
+++			picassoSavedInput = args->structureInput;
+++			args->structureInput = picassoSwap;
+++			args->structureInputSize = PICASSO_IPADOS17_SWAP_BYTES;
+++			if (__atomic_fetch_add(&picassoSwapNotes, 1, __ATOMIC_RELAXED) < 4) {
+++				printf("PICASSO_FBUC swap record re-laid 0x%x -> 0x%x\n",
+++				    PICASSO_IOS16_SWAP_BYTES, PICASSO_IPADOS17_SWAP_BYTES);
+++			}
 ++		}
 ++	}
 ++#endif
@@ -4086,6 +4129,11 @@ new file mode 100644
 + 	}
 + 	ipcExit(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
 ++#if DEVELOPMENT || DEBUG
+++	if (picassoSwap) {
+++		args->structureInput = picassoSavedInput;
+++		args->structureInputSize = PICASSO_IOS16_SWAP_BYTES;
+++		IOFreeData(picassoSwap, PICASSO_IPADOS17_SWAP_BYTES);
+++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);
 ++	}
