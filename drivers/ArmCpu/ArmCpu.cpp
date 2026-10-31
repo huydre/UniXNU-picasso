@@ -521,6 +521,21 @@ void ArmCpu::startThread (void *argument, wait_result_t)
   IOLog ("ArmCpu: CPU %u after 5s step=%u fail=%u mpidr=0x%x timer=%u sgi=%u running=%u ipi_sent=%llu\n", id,
       armcpu_smp_step[id], armcpu_smp_fail[id], armcpu_smp_seen_mpidr[id], armcpu_core_timer[id & 7],
       armcpu_core_sgi[id & 7], armcpu_smp_running, armcpu_ipi_sent);
+  if (id == 1 && gDist != 0) {
+    // Once: the boot core's GIC readback (GICD_TYPER bits 4:0 bound the implemented SPIs) and, for the IPI SPIs,
+    // whether they are enabled, Group 1, still pending (sent but never taken) and routed to the intended core.
+    IOLog ("ArmCpu: GIC igroupr0=0x%x isenabler0=0x%x gicd_ctlr=0x%x gicd_typer=0x%x igrpmodr0=0x%x pmr=0x%x igrpen1=0x%x sre=0x%x\n",
+        armcpu_gic_boot[0], armcpu_gic_boot[1], armcpu_gic_boot[2], armcpu_gic_boot[3], armcpu_gic_boot[4],
+        armcpu_gic_boot[5], armcpu_gic_boot[6], armcpu_gic_boot[7]);
+    const uint32_t word = kIpiSpiBase / 32;
+    IOLog ("ArmCpu: IPI SPI %u.. igroupr=0x%x isenabler=0x%x ispendr=0x%x igrpmodr=0x%x\n", kIpiSpiBase,
+        read32 (gDist, 0x80 + word * 4), read32 (gDist, 0x100 + word * 4), read32 (gDist, 0x200 + word * 4),
+        read32 (gDist, 0xd00 + word * 4));
+    for (uint32_t core = 0; core < 8; core++) {
+      IOLog ("ArmCpu: IPI SPI %u irouter=0x%llx\n", kIpiSpiBase + core,
+          *reinterpret_cast<volatile uint64_t *> (gDist + 0x6000 + 8ULL * (kIpiSpiBase + core)));
+    }
+  }
   thread_terminate (current_thread ());
 }
 
