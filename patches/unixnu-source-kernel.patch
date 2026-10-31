@@ -4051,11 +4051,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,172 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,101 @@
++@@ -6425,15 +6425,168 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4084,6 +4084,46 @@ new file mode 100644
 ++	}
 ++	return out;
 ++}
+++/* The iOS 16 IOSurface client and the retained iPadOS 17 IOSurfaceRootUserClient
+++ * agree on selector numbers but not on two output structures. The limits query
+++ * (selector 13) grew from 0x18 to 0x28 bytes: iPadOS 17 inserts a root field after
+++ * the first eight bytes and widens the trailing byte and flag. The surface lock
+++ * result (create and lookup: selectors 0, 2, 4, 6, 7, 34 and their copies at +54)
+++ * grew from 0xa68 to 0xc68 bytes: the header from 0x68 to 0x88 (0x18 bytes before
+++ * the pixel format, 8 more before the plane count) and each of the 20 planes from
+++ * 0x80 to 0x98 (0x18 new bytes first). Offsets come from the kernel handlers and
+++ * the framework getters of both versions; new fields are dropped. */
+++#define PICASSO_IOS16_LIMITS 0x18
+++#define PICASSO_IPADOS17_LIMITS 0x28
+++#define PICASSO_IOS16_LOCK 0xa68
+++#define PICASSO_IPADOS17_LOCK 0xc68
+++static bool
+++picasso_surface_lock_selector(uint32_t selector)
+++{
+++	switch (selector % 54) {
+++	case 0: case 2: case 4: case 6: case 7: case 34: return true;
+++	default: return false;
+++	}
+++}
+++static void
+++picasso_ios16_limits(uint8_t *out, const uint8_t *in)
+++{
+++	bzero(out, PICASSO_IOS16_LIMITS);
+++	memcpy(out, in, 0x14);
+++	out[0x14] = in[0x20];
+++	memcpy(out + 0x16, in + 0x22, 2);
+++}
+++static void
+++picasso_ios16_lock(uint8_t *out, const uint8_t *in)
+++{
+++	bzero(out, PICASSO_IOS16_LOCK);
+++	memcpy(out, in, 0x30);
+++	memcpy(out + 0x30, in + 0x48, 0x08);
+++	memcpy(out + 0x38, in + 0x58, 0x30);
+++	for (unsigned plane = 0; plane < 20; ++plane) {
+++		memcpy(out + 0x68 + plane * 0x80, in + 0x88 + plane * 0x98 + 0x18, 0x80);
+++	}
+++}
 ++#endif
 ++
 + IOReturn
@@ -4102,6 +4142,21 @@ new file mode 100644
 ++	bool picassoSurface = !strncmp(getMetaClass()->getClassName(), "IOSurfaceRootUserClient", 23);
 ++	uint32_t picassoShape[4] = {args->scalarInputCount, args->scalarOutputCount,
 ++	    args->structureInputSize, args->structureOutputSize};
+++	void *picassoSurfaceOut = NULL, *picassoSurfaceUser = NULL;
+++	uint32_t picassoSurfaceUserSize = 0, picassoSurfaceSize = 0;
+++	if (picassoSurface && args->structureOutput && !args->structureOutputDescriptor) {
+++		if (selector % 54 == 13 && args->structureOutputSize == PICASSO_IOS16_LIMITS) {
+++			picassoSurfaceSize = PICASSO_IPADOS17_LIMITS;
+++		} else if (picasso_surface_lock_selector(selector) && args->structureOutputSize == PICASSO_IOS16_LOCK) {
+++			picassoSurfaceSize = PICASSO_IPADOS17_LOCK;
+++		}
+++		if (picassoSurfaceSize && (picassoSurfaceOut = IOMallocZeroData(picassoSurfaceSize))) {
+++			picassoSurfaceUser = args->structureOutput;
+++			picassoSurfaceUserSize = args->structureOutputSize;
+++			args->structureOutput = picassoSurfaceOut;
+++			args->structureOutputSize = picassoSurfaceSize;
+++		}
+++	}
 ++	if (!strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
 ++		unsigned value = __atomic_fetch_add(&picassoFbCalls, 1, __ATOMIC_RELAXED);
 ++		if (value < 160) {
@@ -4146,6 +4201,18 @@ new file mode 100644
 ++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);
+++	}
+++	if (picassoSurfaceOut) {
+++		if (ret == kIOReturnSuccess) {
+++			if (picassoSurfaceSize == PICASSO_IPADOS17_LIMITS) {
+++				picasso_ios16_limits((uint8_t *)picassoSurfaceUser, (const uint8_t *)picassoSurfaceOut);
+++			} else {
+++				picasso_ios16_lock((uint8_t *)picassoSurfaceUser, (const uint8_t *)picassoSurfaceOut);
+++			}
+++		}
+++		args->structureOutput = picassoSurfaceUser;
+++		args->structureOutputSize = picassoSurfaceUserSize;
+++		IOFreeData(picassoSurfaceOut, picassoSurfaceSize);
 ++	}
 ++	if (picassoSurface && ret && __atomic_fetch_add(&picassoSurfaceFailures, 1, __ATOMIC_RELAXED) < 200) {
 ++		char name[32] = "?";
