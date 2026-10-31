@@ -4347,11 +4347,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch b/patches/xnu/zzzzz
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ipc-queue-dump.patch
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,164 @@
 +diff --git a/osfmk/ipc/mach_debug.c b/osfmk/ipc/mach_debug.c
 +--- a/osfmk/ipc/mach_debug.c
 ++++ b/osfmk/ipc/mach_debug.c
-+@@ -588,3 +588,119 @@
++@@ -588,3 +588,160 @@
 + 	return KERN_NOT_SUPPORTED;
 + }
 + #endif
@@ -4443,17 +4443,58 @@ new file mode 100644
 ++	    bsd ? proc_name_address(bsd) : "?", thread->state, thread->sched_pri,
 ++	    thread->base_pri, thread->sched_mode, thread->th_sched_bucket, ago / NSEC_PER_MSEC);
 ++}
+++#if __arm64__
+++#include <arm/thread.h>
+++#include <arm/proc_reg.h>
+++/* Frame-pointer walk of a thread blocked in the kernel: its user registers were
+++ * saved on entry and its stack does not move. Reads go through the task's map. */
+++static void
+++picasso_print_user_stack(const char *who, thread_t thread)
+++{
+++	arm_saved_state_t *state = get_user_regs(thread);
+++	if (!state || !is_saved_state64(state)) return;
+++	vm_map_t map = get_task_map(get_threadtask(thread));
+++	const uint64_t mask = 0x7fffffffffull;  /* drop pointer authentication bits */
+++	uint64_t frames[16] = { get_saved_state_pc(state) & mask, get_saved_state_lr(state) & mask };
+++	unsigned depth = 2;
+++	uint64_t fp = get_saved_state_fp(state);
+++	while (fp && depth < 16) {
+++		uint64_t pair[2];
+++		if (vm_map_read_user(map, fp, pair, sizeof(pair)) != KERN_SUCCESS || !pair[1]) break;
+++		frames[depth++] = pair[1] & mask;
+++		if (pair[0] <= fp) break;
+++		fp = pair[0];
+++	}
+++	for (unsigned i = 0; i < depth; i += 4) {
+++		printf("PICASSO_STK %s tid=%llu offset=%u %llx %llx %llx %llx\n", who, thread->thread_id, i,
+++		    frames[i], frames[i + 1], frames[i + 2], frames[i + 3]);
+++	}
+++}
+++#endif
 ++void picasso_dump_threads(task_t task, const char *who);
 ++void
 ++picasso_dump_threads(task_t task, const char *who)
 ++{
 ++	uint64_t now = mach_absolute_time();
-++	thread_t thread;
+++	thread_t thread, held[16];
+++	unsigned count = 0;
 ++	task_lock(task);
+++	printf("PICASSO_STK %s main_header=%llx cache_slide=%x\n", who,
+++	    (unsigned long long)task->mach_header_vm_address, task->task_shared_region_slide);
 ++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
 ++		picasso_print_thread(who, thread, now);
+++		if (count < 16 && (thread->state & TH_WAIT)) {
+++			thread_reference(thread);
+++			held[count++] = thread;
+++		}
 ++	}
 ++	task_unlock(task);
+++	for (unsigned i = 0; i < count; i++) {
+++#if __arm64__
+++		picasso_print_user_stack(who, held[i]);
+++#endif
+++		thread_deallocate(held[i]);
+++	}
 ++}
 ++void picasso_dump_runnable(void);
 ++void
