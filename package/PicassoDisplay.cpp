@@ -23,6 +23,7 @@ extern kmod_info_t g_kernel_kmod_info;
 void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 void picasso_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_PicassoAccelerator.cpp");
 IOService *picasso_accelerator_allocate(void);
+bool picasso_power_source_publish(void);
 void picasso_keystore_probe(void);
 IOService *native_legacy_display_allocate(void);
 kern_return_t OSKextLoadKextWithIdentifier(const char *);
@@ -256,6 +257,11 @@ static void publishAcceleratorStub(void) {
     // The registry keeps the published service alive; drop the allocation reference either way.
     OSSafeReleaseNULL(accel);
     IOLog("PICASSO_ACCEL published=%u\n", started);
+    // Its metaclass was registered with the accelerator's above (same file). boot-arg
+    // picasso-power-source=0 leaves the fixed "full, on a charger" power source out.
+    unsigned power = 1;
+    PE_parse_boot_argn("picasso-power-source", &power, sizeof(power));
+    if (power == 1) IOLog("PICASSO_POWER fixed power source published=%u\n", picasso_power_source_publish());
 }
 
 extern "C" void native_legacy_display_late_probe(void) {
