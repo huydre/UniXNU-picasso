@@ -231,12 +231,17 @@ dram_size = "0x80000000"
 # nothing and left the boot without a console. debug=0x14e keeps DB_KPRT (0x8),
 # so kprintf is still enabled; the flags are 0x2 and 0x4 (NMI) plus 0x40 (ARP)
 # and 0x100 (obsolete), none of which halt early.
-# Also pin the platform explicitly: cpus=1 avoids spinning up seven secondary
-# cores before the platform expert has an interrupt controller.
+# All eight cores: ArmCpu maps the GIC on the boot core, then starts each
+# secondary core with PSCI CPU_ON (sheng-smp=1) once the boot core is registered.
+# armcpu-self-ipi=1 makes every core take one SGI from initCPU, which XNU needs
+# before it will signal that core. With one core, background daemons starved
+# notifyd and MobileGestaltHelper for minutes.
 kernel_args = [
   "-v",
   "debug=0x14e",
-  "cpus=1",
+  "cpus=8",
+  "sheng-smp=1",
+  "armcpu-self-ipi=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.

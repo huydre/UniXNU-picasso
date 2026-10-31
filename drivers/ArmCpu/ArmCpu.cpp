@@ -511,7 +511,10 @@ void ArmCpu::startThread (void *argument, wait_result_t)
   ArmCpu *self = static_cast<ArmCpu *> (argument);
   armcpu_smp_step[self->logicalId] = 3;
   // Blocks until the new core reaches the scheduler; a core that never arrives only stalls this helper thread.
-  processor_start (self->machProcessor);
+  kern_return_t status = processor_start (self->machProcessor);
+  const uint32_t id = self->logicalId;
+  IOLog ("ArmCpu: CPU %u start kr=%d step=%u fail=%u psci=%d mpidr=0x%x running=%u\n", id, status,
+      armcpu_smp_step[id], armcpu_smp_fail[id], armcpu_smp_psci_rc[id], armcpu_smp_seen_mpidr[id], armcpu_smp_running);
   thread_terminate (current_thread ());
 }
 
