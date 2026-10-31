@@ -233,15 +233,18 @@ dram_size = "0x80000000"
 # and 0x100 (obsolete), none of which halt early.
 # All eight cores: ArmCpu maps the GIC on the boot core, then starts each
 # secondary core with PSCI CPU_ON (sheng-smp=1) once the boot core is registered.
-# armcpu-self-ipi=1 makes every core take one SGI from initCPU, which XNU needs
-# before it will signal that core. With one core, background daemons starved
-# notifyd and MobileGestaltHelper for minutes.
+# armcpu-self-ipi=1 makes every core take one IPI from initCPU, which XNU needs
+# before it will signal that core. ICC_SGI1R_EL1 SGIs reach no core here (0 taken
+# on every secondary), so armcpu-spi-ipi=1 sends IPIs as software-pended SPIs
+# routed to the target core. With one core, background daemons starved notifyd
+# and MobileGestaltHelper for minutes.
 kernel_args = [
   "-v",
   "debug=0x14e",
   "cpus=8",
   "sheng-smp=1",
   "armcpu-self-ipi=1",
+  "armcpu-spi-ipi=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.
