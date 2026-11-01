@@ -174,9 +174,11 @@ volume = "PICASSOESP"
 # little time to answer SpringBoard. A fresh volatile Data seed disables the jobs for
 # hardware this board has not got (telephony, radios, camera, NFC, biometrics, USB
 # accessories), for a paired Watch or car, and for accounts, Siri, analytics, updates
-# and restore, after HackiOS's DENY list. watchdogd, notifyd and what SpringBoard waits
-# on stay enabled (PROTECTED_JOBS in scripts/prepare-picasso-ram-data.py).
+# and restore, after HackiOS's DENY list. It also disables watchdogd, which traps in its own code
+# during bring-up and panics the system as a critical process (HackiOS denies it too). notifyd and
+# what SpringBoard waits on stay enabled (PROTECTED_JOBS in scripts/prepare-picasso-ram-data.py).
 offline_disabled_jobs = [
+  "com.apple.watchdogd",
   "com.apple.BTServer.avrcp", "com.apple.BTServer.le", "com.apple.BTServer.map",
   "com.apple.BTServer.pbap", "com.apple.ClarityBoard", "com.apple.CommCenter",
   "com.apple.CommCenterMobileHelper", "com.apple.CommCenterRootHelper", "com.apple.DumpPanic",
@@ -254,10 +256,11 @@ kernel_args = [
   # not in the trust cache, so AMFI is told to accept any signature and code-signing enforcement
   # is relaxed. These loosen code signing for the whole system and are a research/bring-up setting.
   "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
-  # amfi_allow_any_signature / cs_enforcement_disable temporarily removed to isolate an early-boot
-  # hang (console never came up). With them gone AMFI refuses the ad-hoc library and dyld simply
-  # skips it, so boot should reach the usual point; that tells us whether the args or the exec
-  # patch caused the hang. Re-add amfi_allow_any_signature=1 once boot is confirmed.
+  # amfi_allow_any_signature=1 lets AMFI accept the ad-hoc, non-trust-cached inject library into
+  # SpringBoard. cs_enforcement_disable is deliberately NOT set: with both, early boot hung before
+  # the console came up, and amfi_allow_any_signature alone is the targeted lever (developer mode is
+  # already on here because protected data is unavailable).
+  "amfi_allow_any_signature=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.

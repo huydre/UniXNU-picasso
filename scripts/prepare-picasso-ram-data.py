@@ -31,11 +31,11 @@ MAX_PACKED = 4 * 1024**2
 MAX_LOGICAL = 2 * 1024**3  # Larger disks select the persistent-store driver path.
 DATA_UUID_KEY = 'CONFIG_XNU_OWNER_DATA_VOLUME_UUID'
 OFFLINE_POLICY_DIR = 'db/com.apple.xpc.launchd'
-# Jobs the offline policy may never disable: this board keeps watchdogd (its
-# retained watchdog is serviced through it), and the rest are what the path to
-# SpringBoard waits on or what many other daemons look up.
+# Jobs the offline policy may never disable: what the path to SpringBoard waits on or what many
+# other daemons look up. watchdogd is NOT here: it traps in its own code during bring-up and, being
+# a critical process, panics the whole system, so it is disabled like HackiOS does.
 PROTECTED_JOBS = frozenset((
-    'com.apple.watchdogd', 'com.apple.notifyd', 'com.apple.SpringBoard',
+    'com.apple.notifyd', 'com.apple.SpringBoard',
     'com.apple.backboardd', 'com.apple.runningboardd', 'com.apple.logd',
     'com.apple.configd', 'com.apple.cfprefsd.xpc.daemon', 'com.apple.containermanagerd',
     'com.apple.mobile.usermanagerd', 'com.apple.lsd', 'com.apple.powerd',
