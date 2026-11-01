@@ -4622,12 +4622,12 @@ diff --git a/patches/xnu/zzzzzz-picasso-springboard-inject.patch b/patches/xnu/z
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-springboard-inject.patch
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,80 @@
 +diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-+index 8bba078..2714c48 100644
++index 8bba078..49d986d 100644
 +--- a/bsd/kern/kern_exec.c
 ++++ b/bsd/kern/kern_exec.c
-+@@ -5823,10 +5823,38 @@ bad:
++@@ -5823,10 +5823,52 @@ bad:
 +  * Note:	The argument and environment vectors are user space pointers
 +  *		to arrays of user space pointers.
 +  */
@@ -4654,6 +4654,20 @@ new file mode 100644
 ++	printf("PICASSO_INJECT SpringBoard started with %s\n", env);
 ++	return true;
 ++}
+++
+++/* Read-only sysctl the inject library reads on load. A sysctl read is allowed by SpringBoard's
+++ * sandbox (a /dev/console write may not be), so this is the reliable proof the library ran. */
+++static int
+++picasso_inject_ack_sysctl SYSCTL_HANDLER_ARGS
+++{
+++	int value = 1;
+++	char name[32] = "?";
+++	proc_name(proc_selfpid(), name, sizeof(name));
+++	printf("PICASSO_SBINJECT library ran: ack read by pid=%d name=%s\n", proc_selfpid(), name);
+++	return SYSCTL_OUT(req, &value, sizeof(value));
+++}
+++SYSCTL_PROC(_kern, OID_AUTO, picasso_inject_ack, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
+++    0, 0, picasso_inject_ack_sysctl, "I", "picasso: prints the reader's pid to confirm injection");
 ++#endif
 ++
 + __attribute__((noinline))
@@ -4666,7 +4680,7 @@ new file mode 100644
 + 	int error = 0;
 + 	int     ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
 + 	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
-+@@ -5996,6 +6024,22 @@ exec_extract_strings(struct image_params *imgp)
++@@ -5996,6 +6038,22 @@ exec_extract_strings(struct image_params *imgp)
 + 		imgp->ip_envc++;
 + 	}
 + 
