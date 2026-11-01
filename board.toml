@@ -254,8 +254,10 @@ kernel_args = [
   # not in the trust cache, so AMFI is told to accept any signature and code-signing enforcement
   # is relaxed. These loosen code signing for the whole system and are a research/bring-up setting.
   "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
-  "amfi_allow_any_signature=1",
-  "cs_enforcement_disable=1",
+  # amfi_allow_any_signature / cs_enforcement_disable temporarily removed to isolate an early-boot
+  # hang (console never came up). With them gone AMFI refuses the ad-hoc library and dyld simply
+  # skips it, so boot should reach the usual point; that tells us whether the args or the exec
+  # patch caused the hang. Re-add amfi_allow_any_signature=1 once boot is confirmed.
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.
