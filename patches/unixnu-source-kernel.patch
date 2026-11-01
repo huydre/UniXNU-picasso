@@ -4118,11 +4118,11 @@ diff --git a/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch b/patches/x
 new file mode 100644
 --- /dev/null
 +++ b/patches/xnu/zzzzzz-picasso-ios16-framebuffer-swap.patch
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,211 @@
 +diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
 +--- a/iokit/Kernel/IOUserClient.cpp
 ++++ b/iokit/Kernel/IOUserClient.cpp
-+@@ -6425,15 +6425,203 @@
++@@ -6425,15 +6425,207 @@
 ++#if DEVELOPMENT || DEBUG
 ++/* Picasso runs iOS 16 IOMobileFramebuffer userland against the retained
 ++ * iPadOS 17 (21H461) framebuffer user client. Swap submission (selector 5)
@@ -4291,15 +4291,19 @@ new file mode 100644
 ++		args->structureInputSize = PICASSO_IOS16_SWAP_BYTES;
 ++		IOFreeData(picassoSwap, PICASSO_IPADOS17_SWAP_BYTES);
 ++	}
-++	/* Selector 12 is kern_RequestPowerChange (one scalar: the requested display power
-++	 * state). The panel is lit by the firmware's GOP framebuffer and has no power
-++	 * switch here; the retained family refuses the request, after which backboardd
-++	 * stops presenting. Accept it as already satisfied. */
+++	/* Selector 12 = kern_RequestPowerChange (scalar: requested display power state). The
+++	 * GOP panel has no power switch; the retained family refuses it, after which backboardd
+++	 * stops presenting. Accept power-on. The lock screen renders but the display then drops;
+++	 * with picasso-fb-reject-off=1 the power-off transition is refused so backboardd keeps
+++	 * presenting the lock screen instead of believing the display went off. */
 ++	if (selector == 12 && ret == kIOReturnUnsupported && args->scalarInputCount == 1 &&
 ++	    !strncmp(getMetaClass()->getClassName(), "IOMobileFramebuffer", 19)) {
-++		printf("PICASSO_FBUC power change to %llu accepted (panel stays lit)\n",
-++		    (unsigned long long)args->scalarInput[0]);
-++		ret = kIOReturnSuccess;
+++		unsigned rejectOff = 0;
+++		PE_parse_boot_argn("picasso-fb-reject-off", &rejectOff, sizeof(rejectOff));
+++		bool off = args->scalarInput[0] == 0;
+++		ret = (rejectOff && off) ? kIOReturnUnsupported : kIOReturnSuccess;
+++		printf("PICASSO_FBUC power change to %llu -> ret=%x\n",
+++		    (unsigned long long)args->scalarInput[0], ret);
 ++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);

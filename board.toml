@@ -261,6 +261,9 @@ kernel_args = [
   # the console came up, and amfi_allow_any_signature alone is the targeted lever (developer mode is
   # already on here because protected data is unavailable).
   "amfi_allow_any_signature=1",
+  # The lock screen renders but the display then drops; refuse the framebuffer power-off
+  # transition so backboardd keeps presenting it (selector 12, IOUserClient.cpp).
+  "picasso-fb-reject-off=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.
