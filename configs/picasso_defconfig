@@ -1,8 +1,8 @@
 # picasso first-console kernel configuration.
 #
 # Reaches the XNU video/serial console and reports the genuine missing-driver panic.
-# Native UFS, software AES and volatile Data are selected; VirtIO / display / Adreno follow in
-# later stages once the platform boots.
+# Native UFS, software AES, volatile Data and CPU/GOP display are selected.
+# Adreno and persistent Data remain unimplemented.
 
 CONFIG_XNU_BUILD_ARCHIVES=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
@@ -30,7 +30,7 @@ CONFIG_XNU_NATIVE_AES=y
 # CONFIG_XNU_NATIVE_VIRTIO_CONSOLE is not set
 CONFIG_XNU_NATIVE_RAM_BLOCK=y
 # CONFIG_XNU_NATIVE_MOBILE_DISPLAY is not set
-# CONFIG_XNU_NATIVE_LEGACY_DISPLAY is not set
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 # CONFIG_XNU_NATIVE_ADRENO is not set
 # CONFIG_XNU_ARMVIRT_PLATFORM is not set
 # CONFIG_XNU_ZONE_PGZ_ALIGNMENT_PROBE is not set
@@ -49,7 +49,8 @@ CONFIG_XNU_OWNER_CACHE_STARTUP=y
 # Publish the authenticated boot manifest for the mounted pair; requires the
 # startup selection. Data is a separate volatile APFS volume prepared in CI.
 CONFIG_XNU_OWNER_BOOT_MANIFEST=y
-CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="8846FE78-2910-4297-AF97-D59BB6F8FC16"
+CONFIG_XNU_OWNER_ROOT_VOLUME_UUID="DADD93F8-DBBF-4B17-A1DF-0F11E64172F7"
+CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="96096B28-B6DC-4BC7-9D3A-2632A0FE53F1"
 # The shared cache is now on the process root mount, so the additional
 # non-union carrier allowance is unnecessary. Original signature and owner
 # verification remain enabled for both volumes.

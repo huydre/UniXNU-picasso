@@ -1,7 +1,13 @@
 # Writable Data for original launchd boot tasks
 
-Build 40901155087 now mounts Data writable and reaches early boot completion.
-The next captured panic is [watchdogd's SIGTRAP](watchdogd-trap-investigation.md).
+Data mounts writable and reaches early boot completion. The actual 768 MiB
+loader allocation has been observed on later builds. Build81 exhausted APFS
+transaction headroom in its 256 MiB logical Data volume; the next seed uses
+512 MiB while retaining sparse allocation and the 4 MiB packed-seed limit.
+See [build81 startup evidence](build81-startup-investigation.md). The new seed
+still needs macOS formatting, SDK build and device validation.
+The original mount and [watchdogd SIGTRAP](watchdogd-trap-investigation.md)
+investigations below are retained as earlier evidence.
 
 ## Device evidence
 
@@ -41,7 +47,7 @@ This source/binary layout audit does not replace a 60 MiB device boot.
 
 `prepare-picasso-ram-data.py` runs as root on the macOS build runner. It checks
 the exact original OS DMG and launchd hashes, mounts the source read-only, creates
-a new 256 MiB bare APFS image, and preserves the original `/private/var` contents,
+a new 512 MiB bare APFS image, and preserves the original `/private/var` contents,
 UID/GID, modes and symlinks. It excludes `staged_system_apps`, adds needed empty
 Data directories, and records source paths and hashes. It does not disable boot
 jobs, skip Setup, alter authenticated system images or install fake user records.
@@ -51,9 +57,11 @@ erase that identity and is intentionally rejected by the kernel build.
 
 The packed seed is capped at 4 MiB. NativeRamBlock's fixed `d4d22d9` implementation
 uses sparse pages for logical disks up to 2 GiB; larger disks require a persistent
-store and are excluded here. A 256 MiB logical size is not a 256 MiB allocation at
-boot. Resident seed pages, new write pages and metadata still consume the existing
-256 MiB kernel memory window, so later memory pressure needs device measurement.
+store and are excluded here. A 512 MiB logical size is not a 512 MiB allocation at
+boot. Resident seed pages, new write pages and metadata consume the kernel's
+owned memory window. Build77 used 256 MiB and reached page shortage; the
+current 768 MiB allocation is confirmed; peak use and the larger seed's runtime
+resident growth still need measurements.
 **Data is volatile: guest changes are lost after reboot.** OS/SystemOS remain
 read-only. No userdata layout changes or UFS persistence options are enabled.
 

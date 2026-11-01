@@ -21,7 +21,9 @@ REPLAY_SOURCES = (
     'bsd/kern/sys_generic.c', 'bsd/kern/kern_descrip.c',
     'bsd/kern/kern_mman.c', 'bsd/kern/ubc_subr.c',
     'osfmk/arm64/sleh.c', 'iokit/Kernel/IOUserClient.cpp',
-    'bsd/vfs/vfs_attrlist.c', 'bsd/kern/bsd_init.c',
+    'bsd/vfs/vfs_attrlist.c', 'bsd/kern/bsd_init.c', 'osfmk/arm/rtclock.c',
+    'osfmk/kern/task.c', 'osfmk/arm/model_dep.c',
+    'osfmk/kern/ipc_tt.c', 'osfmk/kern/task.h', 'osfmk/mach/task.defs',
 )
 
 
@@ -117,6 +119,10 @@ def main():
     assert 'cache_authorized = cache_authorized && native_union;' in kern
     assert 'native_owner_union_path("/usr/lib/libobjc-trampolines.dylib", cache_mount)' in kern
     assert 'native_owner_union_path("/sbin/launchd", root_mount)' in kern
+    assert 'native_owner_publish_boot_manifest(root_device, XNU_OWNER_ROOT_VOLUME_UUID,' in kern
+    assert '#error Supply the signed OS volume UUID for owner boot metadata' in kern
+    assert 'native_owner_publish_boot_manifest(root_device, "' not in kern
+    assert '${XNU_OWNER_ROOT_VOLUME_UUID:-}' in baseline
     assert 'p == kernproc && rootvnode == olddp' in (xnu / 'bsd/vfs/vfs_syscalls.c').read_text()
     assert '-DXNU_OWNER_CACHE_CARRIER=$OWNER_CACHE_CARRIER' in baseline
     assert 'UFS_ARCHIVE=$ROOT/build/native-ufs/libNativeUfs.a' in baseline

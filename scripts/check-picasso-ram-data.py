@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Host regression for seed format, copy/metadata checks and UUID configuration.
 
-All generated inputs remain in --output. Windows checks filesystem contents and
-uses mocked chown calls; only macOS/root preparation validates APFS and ownership.
+All generated inputs remain in --output. Offline policy fixtures simulate root
+ownership on every host so unprivileged CI can run; POSIX copy checks retain real
+ownership calls. Only macOS/root preparation validates APFS policy ownership.
 """
 import argparse
 from contextlib import nullcontext
@@ -15,6 +16,7 @@ import plistlib
 import runpy
 import stat
 import struct
+import tomllib
 from types import SimpleNamespace
 from unittest import mock
 
@@ -117,18 +119,179 @@ def main():
     short_raw = out / 'short.cdr'
     short_raw.write_bytes(raw_bytes[:-1])
     rejected('raw size mismatch', lambda: data.inspect_packed(packed, short_raw))
-    empty_data = out / 'empty256.dbrdisk'
-    empty_data.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, page, data.DATA_BYTES, 0))
+    empty_data = out / 'empty512.dbrdisk'
+    empty_data.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, page, 512 * 1024**2, 0))
 
     def verify_sparse():
         result = data.inspect_packed(empty_data)
         digest = hashlib.sha256()
-        for _ in range(256):
+        for _ in range(512):
             digest.update(bytes(1024**2))
         assert result['logical_bytes'] == data.DATA_BYTES
         assert result['raw_sha256'] == digest.hexdigest()
 
-    passes('256 MiB logical empty disk hashes without dense allocation', verify_sparse)
+    passes('512 MiB logical empty disk hashes without dense allocation', verify_sparse)
+
+    # Drive the production artifact checker through its provenance checks with
+    # producer-derived metadata. Stop at the real mount boundary: this fixture
+    # is a packed-format specimen, not a formatted APFS volume or SDK artifact.
+    artifact_spec = importlib.util.spec_from_file_location('data_artifacts', ROOT / 'scripts/check-picasso-data-artifacts.py')
+    artifact = importlib.util.module_from_spec(artifact_spec); artifact_spec.loader.exec_module(artifact)
+    class ReachedPolicyMount(Exception): pass
+    def artifact_source_case(name, launchd_sha, os_sha, error=None):
+        work = out / name
+        seed_dir = work / 'ram-data'; seed_dir.mkdir(parents=True)
+        (seed_dir / 'data.dbrdisk').write_bytes(empty_data.read_bytes())
+        source_manifest = seed_dir / 'source-var-manifest.json'
+        source_manifest.write_text('{}\n')
+        seed = dict(schema='picasso-ram-data-v1', **data.inspect_packed(seed_dir / 'data.dbrdisk'),
+                    persistent=False, ownership_preserved=True, os_inputs_modified=False,
+                    source_launchd_sha256=launchd_sha, source_sha256=os_sha,
+                    source_manifest_sha256=data.sha256(source_manifest))
+        (seed_dir / 'seed.json').write_text(json.dumps(seed))
+        output = work / 'report.json'
+        def stop_at_mount(image, mountpoint, readonly):
+            assert image == seed_dir / 'data.cdr' and mountpoint == output.with_suffix('.policy-mount')
+            assert readonly is True
+            raise ReachedPolicyMount()
+        preparation = dict(vars(data), mounted=stop_at_mount)
+        with mock.patch.object(artifact.runpy, 'run_path', return_value=preparation) as run_path:
+            try: artifact.check(work, work / 'tree', output)
+            except ReachedPolicyMount: assert error is None
+            except ValueError as failure:
+                assert error is not None and error in str(failure), str(failure)
+            else: raise AssertionError('Expected policy mount boundary or provenance rejection')
+            run_path.assert_called_once_with(str(ROOT / 'scripts/prepare-picasso-ram-data.py'))
+        cases.append({'case': name, 'result': 'rejected as expected' if error else 'pass'})
+
+    old_launchd = '8cec9a3c44a443b08e977ccc5d577850316ad428c575dc01f09b018dbd5b6a25'
+    old_os = '3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d'
+    artifact_source_case('artifact accepts current producer provenance', data.LAUNCHD_SHA256, data.OS_SHA256)
+    artifact_source_case('artifact rejects old launchd', old_launchd, data.OS_SHA256, 'launchd')
+    artifact_source_case('artifact rejects old OS', data.LAUNCHD_SHA256, old_os, 'OS image')
+    artifact_source_case('artifact rejects old OS and launchd', old_launchd, old_os, 'launchd')
+
+    payload = {'offline_disabled_jobs': ['com.apple.CommCenter'],
+               'adt': {'packed_data_ramdisk': True}}
+    def verify_policy_config():
+        assert data.offline_jobs(payload) == ['com.apple.CommCenter']
+
+    passes('explicit volatile telephony job policy', verify_policy_config)
+
+    def verify_board_policy():
+        board_jobs = tomllib.loads((ROOT / 'board.toml').read_text())['payload']['offline_disabled_jobs']
+        assert data.offline_jobs({**payload, 'offline_disabled_jobs': board_jobs}) == board_jobs
+
+    passes('board offline job policy', verify_board_policy)
+    for name, jobs in [('watchdog exclusion', ['com.apple.watchdogd']),
+                       ('notification center exclusion', ['com.apple.CommCenter', 'com.apple.notifyd']),
+                       ('protected media service', ['com.apple.CommCenter', 'com.apple.mediaserverd']),
+                       ('non-stock job', ['org.example.daemon']),
+                       ('duplicate service', ['com.apple.CommCenter'] * 2),
+                       ('wrong policy type', 'com.apple.CommCenter')]:
+        rejected(name, lambda jobs=jobs: data.offline_jobs({**payload, 'offline_disabled_jobs': jobs}))
+    for adt in ({}, {'packed_data_ramdisk': False}, {'packed_data_ramdisk': True, 'persistent_data': True}):
+        rejected('offline policy requires volatile packed media ' + str(adt),
+                 lambda adt=adt: data.offline_jobs({**payload, 'adt': adt}))
+    policy_root = out / 'policy-data'
+    actual_metadata = data.metadata
+    policy_owners = {}
+
+    def policy_fixture(root):
+        directory = root / data.OFFLINE_POLICY_DIR
+        directory.mkdir(parents=True)
+        current = root
+        for part in ('', *Path(data.OFFLINE_POLICY_DIR).parts):
+            if part:
+                current = current / part
+            os.chmod(current, 0o755)
+            policy_owners[current] = (0, 0)
+        return directory
+
+    policy_dir = policy_fixture(policy_root)
+
+    def policy_metadata(path):
+        result = actual_metadata(path)
+        # Only fixture ancestors start as root. Created files remain non-root
+        # until the production installer calls the mocked chown below.
+        result['uid'], result['gid'] = policy_owners.get(Path(path), (501, 20))
+        if os.name == 'nt':
+            # Windows also lacks POSIX modes. POSIX hosts read real modes;
+            # real bytes, types, exclusive creation and fsync run everywhere.
+            result['mode'] = 0o755 if result['type'] == 'directory' else 0o644
+        return result
+
+    def policy_chown(path, uid, gid, *, follow_symlinks):
+        assert follow_symlinks is False
+        policy_owners[Path(path)] = (uid, gid)
+
+    with mock.patch.object(data, 'metadata', side_effect=policy_metadata), \
+            mock.patch.object(data.os, 'chown', side_effect=policy_chown, create=True) as chown:
+        saved_policy = data.install_offline_policy(policy_root, ['com.apple.CommCenter'])
+        assert saved_policy['disabled_jobs'] == ['com.apple.CommCenter']
+        assert saved_policy['watchdogd_disabled'] is False and len(saved_policy['files']) == 2
+        assert plistlib.loads((policy_dir / 'disabled.plist').read_bytes()) == {'com.apple.CommCenter': True}
+        assert (policy_dir / 'disabled.migrated').read_bytes() == b''
+        assert data.verify_offline_policy(policy_root, ['com.apple.CommCenter']) == saved_policy
+        assert chown.call_count == 2
+        assert all(call.args[1:] == (0, 0) and call.kwargs == {'follow_symlinks': False}
+                   for call in chown.call_args_list)
+        cases.append({'case': 'real offline files, modern marker and simulated root ownership calls', 'result': 'pass'})
+        rejected('never overwrite existing policy',
+                 lambda: data.install_offline_policy(policy_root, ['com.apple.CommCenter']))
+        (policy_dir / 'disabled.migrated').write_bytes(b'invalid marker')
+        rejected('migration marker content mismatch',
+                 lambda: data.verify_offline_policy(policy_root, ['com.apple.CommCenter']))
+        (policy_dir / 'disabled.migrated').write_bytes(b'')
+        for field, value in [('type', 'symlink'), ('uid', 501), ('gid', 501), ('mode', 0o666)]:
+            def mismatched_file(path, field=field, value=value):
+                entry = policy_metadata(path)
+                return {**entry, field: value} if Path(path).name == 'disabled.plist' else entry
+
+            with mock.patch.object(data, 'metadata', side_effect=mismatched_file):
+                rejected('policy file ' + field + '=' + str(value),
+                         lambda: data.verify_offline_policy(policy_root, ['com.apple.CommCenter']))
+        (policy_dir / 'disabled.plist').write_bytes(plistlib.dumps({'com.apple.watchdogd': True}))
+        rejected('actual policy excludes watchdog',
+                 lambda: data.verify_offline_policy(policy_root, ['com.apple.CommCenter']))
+    for ancestor in (policy_root, policy_root / 'db', policy_dir):
+        for field, value in [('type', 'symlink'), ('type', 'file'), ('uid', 501),
+                             ('gid', 20), ('mode', 0o775), ('mode', 0o757)]:
+            def mismatched_ancestor(path, ancestor=ancestor, field=field, value=value):
+                entry = policy_metadata(path)
+                return {**entry, field: value} if Path(path) == ancestor else entry
+
+            with mock.patch.object(data, 'metadata', side_effect=mismatched_ancestor):
+                rejected('policy ancestor ' + ancestor.relative_to(out).as_posix()
+                         + ' ' + field + '=' + str(value),
+                         lambda: data.offline_policy_directory(policy_root))
+    unowned_root = out / 'unowned-policy-data'
+    unowned_dir = policy_fixture(unowned_root)
+    with mock.patch.object(data, 'metadata', side_effect=policy_metadata), \
+            mock.patch.object(data.os, 'chown', create=True) as chown:
+        rejected('policy files must acquire root ownership before readback',
+                 lambda: data.install_offline_policy(unowned_root, ['com.apple.CommCenter']))
+        assert chown.call_count == 2
+        assert (unowned_dir / 'disabled.plist').is_file()
+        assert (unowned_dir / 'disabled.migrated').is_file()
+    failed_root = out / 'failed-policy-data'
+    failed_dir = policy_fixture(failed_root)
+    with mock.patch.object(data, 'metadata', side_effect=policy_metadata), \
+            mock.patch.object(data.os, 'chown', side_effect=policy_chown, create=True) as chown, \
+            mock.patch.object(data.os, 'fsync', side_effect=OSError('simulated sync failure')):
+        try:
+            data.install_offline_policy(failed_root, ['com.apple.CommCenter'])
+        except OSError:
+            assert (failed_dir / 'disabled.plist').is_file()
+            assert not (failed_dir / 'disabled.migrated').exists()
+            chown.assert_not_called()
+            cases.append({'case': 'sync failure aborts installation and retains incomplete files', 'result': 'pass'})
+        else:
+            raise AssertionError('Offline policy ignored sync failure')
+    empty = data.install_offline_policy(out / 'absent-empty-policy', [])
+    assert empty == dict(disabled_jobs=[], watchdogd_disabled=False, files=[])
+    assert not (out / 'absent-empty-policy').exists()
+    cases.append({'case': 'empty policy creates no filesystem objects', 'result': 'pass'})
 
     identity = '10203040-5060-7080-9010-203040506070'
     config = ('# preserve this comment\nCONFIG_XNU_NATIVE_RAM_BLOCK=y\n'
@@ -270,7 +433,9 @@ def main():
     mount_case('seed failure still detaches', readonly_info, True, 1, body_error=True)
     report = dict(scope='Host format/config/content regression; no APFS mount or device validation',
                   host=os.name, source_sha256=data.sha256(ROOT / 'scripts/prepare-picasso-ram-data.py'),
-                  native_posix_ownership_tested=os.name != 'nt', cases=cases)
+                  native_posix_ownership_tested=os.name != 'nt',
+                  offline_policy_ownership='simulated on every host; chown updates fixture metadata',
+                  offline_policy_native_modes_tested=os.name != 'nt', cases=cases)
     (out / 'results.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(f'PASS: {len(cases)} seed cases; outputs retained in {out}')
 

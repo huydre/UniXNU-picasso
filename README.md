@@ -1,5 +1,12 @@
 # UniXNU on Redmi K30 5G (picasso, SM7250)
 
+> **This branch builds an experimental iPhone X / iOS 16.7.16 (20H392) target.**
+> Firmware inputs, ADT identity and the owner-signed root policy have been updated.
+> XNU 10063 / Darwin 23 and its qualified native kexts are retained. iOS 16
+> userspace compatibility is not yet established. Input, root-policy and native
+> ABI checks gate the build; runtime validation is reported separately.
+> Device results below describe the previous iPadOS branch.
+
 > **Status: original early userspace runs; service startup is still incomplete.**
 > UFS, authenticated OS/SystemOS, the dyld shared cache, volatile Data and AES
 > startup pass on the device. The latest tested image reboots after a userspace

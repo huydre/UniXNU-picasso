@@ -51,7 +51,8 @@ typedef uint8_t dyld_bool;
 struct task;
 typedef struct task *task_t;
 struct host_task { uint32_t cached_slide; uint64_t image_info, main_header; };
-struct reason { unsigned osr_namespace; uint64_t osr_code; };
+struct reason { unsigned osr_namespace; uint64_t osr_code; char *osr_kcd_buf; uint32_t osr_bufsize; };
+typedef struct reason *os_reason_t;
 struct proc { int pid, pidversion; uint64_t uniqueid; struct reason *p_exit_reason; task_t task; char p_name[33]; };
 typedef struct proc *proc_t;
 struct thread { uint64_t tid; };
@@ -67,8 +68,32 @@ static int proc_getpid(proc_t p) { return p->pid; }
 static int proc_pidversion(proc_t p) { return p->pidversion; }
 static uint64_t proc_uniqueid(proc_t p) { return p->uniqueid; }
 static task_t proc_task(proc_t p) { return p->task; }
-static char host_exit_description[200];
-static const char *exit_reason_get_string_desc(struct reason *r) { return r ? host_exit_description : NULL; }
+/* A bounded two-item kcdata model. Iterator operations expose the actual item
+ * length; ASan scenarios below put unterminated data at the allocation end. */
+#define KCDATA_BUFFER_BEGIN_OS_REASON 1
+#define EXIT_REASON_USER_DESC 2
+struct host_item { uint32_t type, size; uint64_t flags; };
+static struct { struct host_item begin, desc; char text[1200]; } host_reason_data;
+#define host_exit_description host_reason_data.text
+typedef struct { const unsigned char *item, *end; } kcdata_iter_t;
+static kcdata_iter_t kcdata_iter(const void *buffer, uint32_t size) {
+ kcdata_iter_t i={(const unsigned char *)buffer,(const unsigned char *)buffer+size};return i;
+}
+static int kcdata_iter_valid(kcdata_iter_t i) {
+ if(!i.item || i.item>i.end || (size_t)(i.end-i.item)<sizeof(struct host_item))return 0;
+ const struct host_item *p=(const struct host_item *)i.item;
+ return p->size<=(size_t)(i.end-i.item)-sizeof(*p);
+}
+static uint32_t kcdata_iter_type(kcdata_iter_t i) {assert(kcdata_iter_valid(i));return ((const struct host_item *)i.item)->type;}
+static uint32_t kcdata_iter_size(kcdata_iter_t i) {assert(kcdata_iter_valid(i));return ((const struct host_item *)i.item)->size;}
+static const void *kcdata_iter_payload(kcdata_iter_t i) {assert(kcdata_iter_valid(i));return i.item+sizeof(struct host_item);}
+static kcdata_iter_t kcdata_iter_find_type(kcdata_iter_t i,uint32_t type) {
+ while(kcdata_iter_valid(i)) {
+  if(kcdata_iter_type(i)==type)return i;
+  i.item+=sizeof(struct host_item)+kcdata_iter_size(i);
+ }
+ return i;
+}
 static uint64_t thread_tid(thread_t t) { return t->tid; }
 static int is_saved_state64(arm_saved_state_t *s) { return s->is64; }
 static uint32_t get_saved_state_cpsr(arm_saved_state_t *s) { return s->cpsr; }
@@ -81,16 +106,17 @@ static uint64_t get_saved_state_reg(arm_saved_state_t *s,unsigned i) { assert(i<
 static user_addr_t task_get_all_image_info_addr(task_t t) { return ((struct host_task *)t)->image_info; }
 struct mapping { user_addr_t address; void *data; size_t size; };
 static struct mapping maps[16];
-static unsigned map_count, reads, lines, bytes;
+static unsigned map_count, reads, lines, host_bytes;
 static int scenario;
 static char output[32768];
 static int copyin(user_addr_t,void *,size_t);
 static int copyinstr(user_addr_t,char *,size_t,size_t *);
 static int host_log(const char *format,...) {
  va_list args;va_start(args,format);
- int n=vsnprintf(output+bytes,sizeof(output)-bytes,format,args);
- va_end(args);assert(n>0 && (unsigned)n<sizeof(output)-bytes);
- bytes+=(unsigned)n;++lines;return n;
+ int n=vsnprintf(output+host_bytes,sizeof(output)-host_bytes,format,args);
+ va_end(args);assert(n>0 && (unsigned)n<sizeof(output)-host_bytes);
+ if(strstr(format,"PICASSO_SERVICE exit") || strstr(format,"PICASSO_SERVICE description"))assert(n<256);
+ host_bytes+=(unsigned)n;++lines;return n;
 }
 #define printf host_log
 #include "actual-helper.inc"
@@ -102,7 +128,7 @@ static struct mapping *find(user_addr_t address) {
  return NULL;
 }
 static int copyin(user_addr_t address,void *destination,size_t n) {
- assert(picasso_fault_lock==0 && (scenario>=56 ? lines%7==4 : lines%6==3));++reads;
+ assert(picasso_fault_lock==0 && (scenario>=56 ? lines%8==5 : lines%6==3));++reads;
  if((scenario==25 && address==0x1000) ||
     (scenario==28 && address==UINT64_C(0x10000ab0c)) ||
     (scenario==29 && address==0x9000) ||
@@ -115,7 +141,7 @@ static int copyin(user_addr_t address,void *destination,size_t n) {
  memcpy(destination,m->data,n); return 0;
 }
 static int copyinstr(user_addr_t address,char *destination,size_t capacity,size_t *copied) {
- assert(picasso_fault_lock==0 && (scenario>=56 ? lines%7==4 : lines%6==3));++reads;
+ assert(picasso_fault_lock==0 && (scenario>=56 ? lines%8==5 : lines%6==3));++reads;
  if((scenario==33 && address==0xb000) || (scenario==34 && address==0x8000)) return EFAULT;
  struct mapping *m=find(address);
  if(!m) return EFAULT;
@@ -129,7 +155,7 @@ static int copyinstr(user_addr_t address,char *destination,size_t capacity,size_
 static void contains(const char *needle) {
  if(!strstr(output,needle)) { fprintf(stderr,"scenario %d missing: %s\n%s",scenario,needle,output);abort(); }
 }
-static void reset_output(void) { bytes=lines=0; output[0]=0; }
+static void reset_output(void) { host_bytes=lines=0; output[0]=0; }
 int main(int argc,char **argv) {
  assert(argc==2); scenario=atoi(argv[1]);
  struct host_task task={0xabc,0x9000,UINT64_C(0x100000000)},other_task={0xdef,0x9000,0};
@@ -139,7 +165,10 @@ int main(int argc,char **argv) {
  if(scenario==54) task.main_header=0;
  if(scenario==55) task.main_header=UINT64_C(0xfedcba9876543210);
  const uint64_t captured_main_header=task.main_header;
- struct reason reason={OS_REASON_SIGNAL,SIGTRAP};
+ host_reason_data.begin.type=KCDATA_BUFFER_BEGIN_OS_REASON;
+ host_reason_data.desc.type=EXIT_REASON_USER_DESC;
+ host_reason_data.desc.size=sizeof(host_reason_data.text);
+ struct reason reason={OS_REASON_SIGNAL,SIGTRAP,(char *)&host_reason_data,sizeof(host_reason_data)};
  struct proc proc={95,3,98765,&reason,(task_t)&task,"watchdogd"},other=proc;
  arm_saved_state_t state={0}; state.is64=1;state.pc=UINT64_C(0x10000ab0c);state.lr=0x1234;state.sp=0x4560;state.fp=0x1000;
  for(unsigned i=0;i<29;++i) state.x[i]=0x3000+i;
@@ -178,7 +207,7 @@ int main(int argc,char **argv) {
  if(scenario==42) {frames[0][0]=0x101000;frames[1][0]=0;map(0x101000,frames[1],sizeof(frames[1]));}
  if(scenario==39) picasso_user_breakpoint(NULL,0xf2000000,task.cached_slide,task.main_header);
  else if(scenario!=2) picasso_user_breakpoint(&state,0xf2000000,task.cached_slide,task.main_header);
- assert(!reads && !bytes && !lines);
+ assert(!reads && !host_bytes && !lines);
  if(scenario!=2 && scenario!=3 && scenario!=4 && scenario!=5 && scenario!=6 && scenario!=39) {
   assert(picasso_faults[0].valid && picasso_faults[0].pc==state.pc && picasso_faults[0].lr==state.lr && picasso_faults[0].sp==state.sp && picasso_faults[0].fp==state.fp);
   assert(picasso_faults[0].slide==(uint64_t)task.cached_slide);
@@ -189,28 +218,55 @@ int main(int argc,char **argv) {
  if(scenario>=56) {
   strcpy(proc.p_name,"backboardd");
   strcpy(host_exit_description,"reason\nline\t\200");
+  if(scenario>=64) {reason.osr_namespace=20;reason.osr_code=1;}
   if(scenario==56) {
    picasso_report_service_exit(&proc,rv);
    contains("PICASSO_SERVICE exit sample=1 pid=95 name=backboardd");
-   contains("description=reason?line??");contains("record=breakpoint-snapshot");
-   assert(lines==7 && reads<=8);goto pass;
+   contains("offset=0 text=reason?line??");contains("record=breakpoint-snapshot");
+   assert(lines==8 && reads<=8);goto pass;
   }
   if(scenario==57) {strcpy(proc.p_name,"backboardd-helper");picasso_report_service_exit(&proc,rv);assert(!lines && !reads);goto pass;}
-  if(scenario==58) {rv=78<<8;picasso_report_service_exit(&proc,rv);contains("status=78");contains("record=not-breakpoint-exit");assert(lines==2 && !reads);goto pass;}
-  if(scenario==59) {reason.osr_code=9;picasso_report_service_exit(&proc,9);contains("exit_signal=9 namespace=2 code=9");contains("record=not-breakpoint-exit");assert(lines==2 && !reads);goto pass;}
-  if(scenario==60) {++thread.tid;picasso_report_service_exit(&proc,rv);contains("record=missing");assert(lines==2 && !reads);goto pass;}
-  if(scenario==61) {proc.p_exit_reason=NULL;picasso_report_service_exit(&proc,rv);contains("description=\n");contains("namespace=0 code=0");assert(lines==2 && !reads);goto pass;}
+  if(scenario==58) {rv=78<<8;picasso_report_service_exit(&proc,rv);contains("status=78");contains("record=not-breakpoint-exit");assert(lines==3 && !reads);goto pass;}
+  if(scenario==59) {reason.osr_code=9;picasso_report_service_exit(&proc,9);contains("exit_signal=9 namespace=2 code=9");contains("record=not-breakpoint-exit");assert(lines==3 && !reads);goto pass;}
+  if(scenario==60) {++thread.tid;picasso_report_service_exit(&proc,rv);contains("record=missing");assert(lines==3 && !reads);goto pass;}
+  if(scenario==61) {proc.p_exit_reason=NULL;picasso_report_service_exit(&proc,rv);contains("offset=0 text=\n");contains("namespace=0 code=0");assert(lines==3 && !reads);goto pass;}
   if(scenario==62) {
-   const char *names[]={"backboardd","SpringBoard","mediaserverd","audiomxd","CommCenter","powerd","mobiletimerd"};
-   for(unsigned n=0;n<7;++n) {
+   const char *names[]={"backboardd","SpringBoard","mediaserverd","audiomxd","CommCenter","powerd","mobiletimerd","liveactivitiesd"};
+   for(unsigned n=0;n<8;++n) {
     strcpy(proc.p_name,names[n]);
     for(unsigned i=0;i<20;++i) {++proc.pid;picasso_report_service_exit(&proc,0);}
    }
-   assert(lines==56 && !reads);contains("sample=4");assert(!strstr(output,"sample=5"));
+   assert(lines==96 && !reads);contains("sample=4");assert(!strstr(output,"sample=5"));
    /* Service quotas must not consume the critical-exit quota. */
-   picasso_report_critical_fault(&proc,0);assert(lines==57);contains("PICASSO_CRITICAL sample=1");goto pass;
+   picasso_report_critical_fault(&proc,0);assert(lines==97);contains("PICASSO_CRITICAL sample=1");goto pass;
   }
-  if(scenario==63) {memset(host_exit_description,'A',sizeof(host_exit_description));host_exit_description[199]=0;picasso_report_service_exit(&proc,0);assert(lines==2 && !reads);char *s=strstr(output,"description=")+12;assert(strchr(s,'\n')-s==160);goto pass;}
+  if(scenario==63) {memset(host_exit_description,'A',sizeof(host_exit_description));host_exit_description[199]=0;picasso_report_service_exit(&proc,0);assert(lines==4 && !reads);char *s=strstr(output,"offset=0 text=")+14;assert(strchr(s,'\n')-s==128);contains("description_bytes=199 capped=0");contains("offset=128 text=");goto pass;}
+  if(scenario==64) {
+   memset(host_exit_description,'A',sizeof(host_exit_description));
+   memcpy(host_exit_description+180,"VITAL_TASK_AFTER_PREFIX",23);host_exit_description[220]=0;
+   picasso_report_service_exit(&proc,9);contains("VITAL_TASK_AFTER_PREFIX");assert(lines==4 && !reads);goto pass;
+  }
+  if(scenario==65) {
+   memset(host_exit_description,'A',sizeof(host_exit_description));
+   picasso_report_service_exit(&proc,9);contains("description_bytes=960 capped=1");contains("offset=896 text=");
+   assert(!strstr(output,"offset=1024") && lines==10 && !reads);goto pass;
+  }
+  if(scenario==66 || scenario==67) {
+   size_t length=scenario==66?7:0, total=sizeof(struct host_item)*2+length;
+   unsigned char *buffer=(unsigned char *)malloc(total);assert(buffer);memset(buffer,0,total);
+   ((struct host_item *)buffer)->type=KCDATA_BUFFER_BEGIN_OS_REASON;
+   struct host_item *desc=(struct host_item *)(buffer+sizeof(struct host_item));desc->type=EXIT_REASON_USER_DESC;desc->size=(uint32_t)length;
+   memset(buffer+sizeof(struct host_item)*2,'Z',length);reason.osr_kcd_buf=(char *)buffer;reason.osr_bufsize=(uint32_t)total;
+   picasso_report_service_exit(&proc,9);assert(lines==3 && !reads);
+   contains(scenario==66?"offset=0 text=ZZZZZZZ\n":"offset=0 text=\n");free(buffer);goto pass;
+  }
+  if(scenario>=68 && scenario<=71) {
+   if(scenario==68)host_reason_data.begin.type=99;
+   if(scenario==69)host_reason_data.desc.size=UINT32_MAX;
+   if(scenario==70)host_reason_data.desc.type=99;
+   if(scenario==71)reason.osr_bufsize=sizeof(struct host_item)-1;
+   picasso_report_service_exit(&proc,9);contains("description_bytes=0 capped=0\n");contains("offset=0 text=\n");assert(lines==3 && !reads);goto pass;
+  }
  }
  if(scenario==7) picasso_fault_lock=1;
  if(scenario==8) ++proc.pid;
@@ -235,9 +291,9 @@ int main(int argc,char **argv) {
  if(scenario==21) {state.pc=UINT64_C(0x10000ab54);picasso_user_breakpoint(&state,0xf2000000,task.cached_slide,task.main_header);}
  if(scenario==38) {
   for(unsigned i=0;i<8;++i) {picasso_user_breakpoint(&state,0xf2000000,task.cached_slide,task.main_header);picasso_report_critical_fault(&proc,SIGTRAP);}
-  assert(lines==48);unsigned prior_reads=reads,prior_bytes=bytes;
+  assert(lines==48);unsigned prior_reads=reads,prior_bytes=host_bytes;
   picasso_user_breakpoint(&state,0xf2000000,task.cached_slide,task.main_header);picasso_report_critical_fault(&proc,SIGTRAP);
-  assert(reads==prior_reads && bytes==prior_bytes && lines==48);
+  assert(reads==prior_reads && host_bytes==prior_bytes && lines==48);
   contains("sample=8");goto pass;
  }
  state.pc=0xdeadbeef;state.lr=0xfefefefe;state.x[0]=0;task.cached_slide=0xffff;
@@ -287,10 +343,10 @@ int main(int argc,char **argv) {
  if(scenario==42) contains("frames=2 error=0 stop=end");
  assert(reads<=8);
 pass:
- assert(bytes<16000);
+ assert(host_bytes<16000);
  unsigned newline_count=0;
- for(unsigned i=0;i<bytes;++i) if(output[i]=='\n') ++newline_count;
+ for(unsigned i=0;i<host_bytes;++i) if(output[i]=='\n') ++newline_count;
  assert(newline_count==lines);
- fprintf(stdout,"PASS scenario=%d reads=%u lines=%u bytes=%u\n",scenario,reads,lines,bytes);
+ fprintf(stdout,"PASS scenario=%d reads=%u lines=%u host_bytes=%u\n",scenario,reads,lines,host_bytes);
  return 0;
 }
