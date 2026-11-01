@@ -216,7 +216,7 @@ offline_disabled_jobs = [
 # --skip-setup: Setup and per-boot data migration are skipped, and the display does
 # not dim or sleep (the board has no input yet). The wrapper names the iOS userland.
 skip_setup_tool = "scripts/picasso-seed-skip-setup.py"
-skip_setup_args = ["--no-auto-dim"]
+skip_setup_args = ["--no-auto-dim", "--inject-lib", "out/picasso/libpicasso-sb.dylib"]
 # Room for the kernel, original trust caches and packed APFS Data seed.
 # The payload builder retains its 95% content limit; CI checks the actual seed.
 size_mib = 60
@@ -249,6 +249,13 @@ kernel_args = [
   # firmware leaves the cores slow. No thermal governor runs yet; the SoC's own limits
   # management hardware still applies.
   "armcpu-cpufreq=1",
+  # SpringBoard library injection for bring-up (bsd/kern/kern_exec.c): the kernel starts
+  # SpringBoard with DYLD_INSERT_LIBRARIES set to this path. The library is ad-hoc signed and
+  # not in the trust cache, so AMFI is told to accept any signature and code-signing enforcement
+  # is relaxed. These loosen code signing for the whole system and are a research/bring-up setting.
+  "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
+  "amfi_allow_any_signature=1",
+  "cs_enforcement_disable=1",
   # No picasso_session_s timer: after a long run the bootloader ignores the armed
   # IMEM Fastboot reason and boots normally, and the first boot on volatile Data
   # rebuilds the LaunchServices database for longer than a short session lasts.

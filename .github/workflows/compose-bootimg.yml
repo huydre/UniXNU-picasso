@@ -112,6 +112,12 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
 
+      - name: Build the SpringBoard inject library
+        run: |
+          mkdir -p out/picasso
+          python3 scripts/build-picasso-sb-inject.py \
+            package/picasso-springboard/picasso-sb-probe.m out/picasso/libpicasso-sb.dylib
+
       - name: Download the target IPSW
         run: |
           mkdir -p out/ipsw
